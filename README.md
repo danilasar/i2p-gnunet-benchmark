@@ -14,6 +14,7 @@ i2pd/SAM STREAM и GNUnet/CADET.
 | i2pd: запуск нод, ZIP reseed bootstrap, проверка SAM bridge | ✓ |
 | Smoke-тесты (`go test`) | ✓ |
 | SAM STREAM sender/receiver (Rust) | заглушки |
+| TODO: убрать полный bootstrap в `TestSAMTransfer` — сейчас nodes 1-3 заранее получают `RouterInfo` всех нод через `reseed_full.zip`; целевое поведение — discovery от seed/floodfill-ноды без знания всех участников | TODO |
 | CADET sender/receiver | не начато |
 | Сбор метрик (goodput, RTT, CPU/RSS) | не начато |
 | Underlay-профили (tc/netem) | не начато |

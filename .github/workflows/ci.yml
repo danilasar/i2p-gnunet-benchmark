@@ -1,0 +1,24 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: cd practice && docker build -t coursework-overlay:latest .
+
+      - name: Run smoke tests
+        run: |
+          docker run --rm --privileged \
+            -v ${{ github.workspace }}/practice:/practice \
+            -w /practice \
+            coursework-overlay:latest \
+            go test ./testbed/... -v -run Smoke -timeout 5m

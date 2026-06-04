@@ -3,164 +3,138 @@
 ## Архитектура
 
 ```
-┌─────────────────────────────────────────────┐
-│  testbed/ (go test)                          │
-│  smoke_test.go, pilot_test.go, ...           │
-└──────────────┬──────────────────────────────┘
-               │ использует
-┌──────────────▼──────────────────────────────┐
-│  internal/                                   │
-│  ├── topology/   netns, veth, bridge         │
-│  ├── node/       GnunetPeer, I2pdNode        │
-│  ├── config/     генератор конфигов (TODO)   │
-│  └── metrics/    CPU/RSS, JSONL лог (TODO)   │
-└──────────────┬──────────────────────────────┘
-               │ запускает субпроцессы
-┌──────────────▼──────────────────────────────┐
-│  Docker-контейнер (alt:sisyphus)             │
-│  gnunet-arm, i2pd, gnunet-communicator-tcp   │
-│  rs/sam-sender, rs/sam-receiver  (Rust)      │
-└─────────────────────────────────────────────┘
+testbed/smoke_test.go
+    └── internal/topology   — netns, veth, bridge
+    └── internal/node       — GnunetPeer, I2pdNode
+        └── *.conf.tmpl     — конфиги через text/template + go:embed
+
+Всё запускается внутри Docker (--privileged).
+Go-код управляет нодами через os/exec и ip netns exec.
 ```
 
-Все тесты запускаются внутри `--privileged` контейнера.
-Go-код управляет нодами через `os/exec` и `ip netns exec`.
+Пакеты `internal/config` и `internal/metrics` запланированы, но не реализованы.
 
-## Пакеты
-
-### `internal/topology`
-
-Создаёт Linux network namespace, veth-пару и bridge для каждой ноды.
-Cleanup регистрируется через `t.Cleanup()` в обратном порядке.
+## `internal/topology`
 
 ```go
 tp := topology.NewTopology(t, n, "10.88.0")
-// tp.Nodes[i].NS  — имя namespace
-// tp.Nodes[i].IP  — IP-адрес
-// tp.Nodes[i].Veth — имя veth внутри namespace
+tp.Nodes[i].NS    // имя namespace: "ns_10_88_0<i>"
+tp.Nodes[i].IP    // "10.88.0.<i+1>"
+tp.Nodes[i].Veth  // имя veth внутри namespace
 ```
 
-Все ошибки `ip`-команд — `t.Fatalf`. Топология не частично создаётся.
+Создаёт bridge, N namespace, N veth-пар. Cleanup — `t.Cleanup()` в обратном
+порядке. Любая ошибка `ip`-команды — `t.Fatalf`.
 
-### `internal/node`
+## `internal/node`
 
-**`GnunetPeer`** — один GNUnet-пир:
+### GnunetPeer
 
 ```go
 p := node.NewGnunetPeer(t, index, ns, ip, port)
-p.WriteConfig()                          // пишет peer.conf из шаблона
-p.Start()                                // gnunet-arm -s (неблокирующий)
-hello, _ := p.ExportHello()             // gnunet-hello -e
-p.ImportHello(hello)                    // gnunet-hello --import
-p.WaitCoreConnected(ctx)                // поллит лог, ищет "notification about connection from"
+p.WriteConfig()                   // peer.conf из gnunet.conf.tmpl
+p.Start()                         // gnunet-arm -s, cmd.Start() (неблокирующий)
+hello, _ := p.ExportHello()      // gnunet-hello -e
+p.ImportHello(hello)             // gnunet-hello --import
+p.WaitCoreConnected(ctx)         // поллит лог, ищет "notification about connection from"
 ```
 
-**`I2pdNode`** — один i2pd-роутер:
+Cleanup: `gnunet-arm -e` + `cmd.Wait()`.
+
+Конфиг (`gnunet.conf.tmpl`): `@INLINE@` стандартных конфигов из
+`/usr/share/gnunet/config.d/`, override для `[PATHS]`, `[communicator-tcp]`,
+`[communicator-udp]` (отключён), `[hostlist]` (SERVERS =).
+
+### I2pdNode
 
 ```go
 n := node.NewI2pdNode(t, index, ns, ip, port, floodfill)
-n.SAMPort = 17656                        // 0 = SAM отключён
-n.WriteConfig(zipFile)                  // пишет i2pd.conf из шаблона
-n.Start()                               // i2pd --daemon (неблокирующий)
-n.CreateReseedZip(dest)                 // router.info → ZIP с правильным именем
-n.WaitBootstrapped(ctx)                 // поллит лог, ищет "NetDbReq: Exploring new"
+n.SAMPort = 17656                 // 0 = SAM отключён
+n.WriteConfig(zipFile)           // i2pd.conf из i2pd.conf.tmpl
+n.Start()                        // i2pd --daemon (форкается сам)
+n.CreateReseedZip(dest)          // router.info → ZIP
+n.WaitBootstrapped(ctx)          // поллит лог, ищет "NetDbReq: Exploring new"
 ```
 
-Конфиги генерируются из `*.conf.tmpl` через `text/template`, встроенных через `//go:embed`.
+Cleanup: `pkill -f "datadir=<dir> "` + `time.Sleep(2s)`.
 
-### `internal/config` (TODO)
+Конфиг (`i2pd.conf.tmpl`): `[reseed]` с `{{if .ZipFile}}zipfile = ...{{end}}`,
+`[exploratory]` с `inbound.length = 0`, `[ntcp2]`, SSU2 отключён.
 
-Планируется: генератор underlay-матрицы (netem-профили P1–P7), параметров туннелей.
-
-### `internal/metrics` (TODO)
-
-Планируется: сбор CPU/RSS из `/proc/<pid>/status`, запись JSONL.
+**I2P base64:** `base64.RawStdEncoding` + замена `+`→`-`, `/`→`~`.
+Не использовать `base64.RawURLEncoding` — даёт `_` вместо `~`, имена файлов в ZIP будут неверными.
 
 ## Конвенции
 
-**Управление ресурсами:** всегда `t.Cleanup()`, никогда `defer` на уровне теста.
-`t.TempDir()` для всех временных директорий — очищается автоматически.
+**Ресурсы:** `t.TempDir()` для всех директорий, `t.Cleanup()` для процессов.
+Никогда не `defer` на уровне теста — не выполнится при `t.Fatal`.
 
-**Ошибки:** в `internal/` методы возвращают `error`; в `testbed/` используется
-`require.NoError(t, err)` — тест сразу останавливается при первой ошибке.
+**Ошибки:** `internal/` возвращает `error`; `testbed/` — `require.NoError`.
 
-**Ожидание:** `context.WithTimeout` + поллинг лога раз в секунду.
-Никаких `time.Sleep` без явного обоснования в комментарии.
+**Ожидание:** `context.WithTimeout` + ticker 1s. Никаких `time.Sleep` без
+объяснения в комментарии.
 
-**Субпроцессы:** только `os/exec`, никаких CGo и прямых syscall.
-`gnunet-arm -s` — через `cmd.Start()` (неблокирующий).
-`i2pd --daemon` — через `cmd.CombinedOutput()` (daemon форкается сам).
+**Субпроцессы:** только `os/exec`. `gnunet-arm -s` — `cmd.Start()`.
+`i2pd --daemon` — `cmd.CombinedOutput()` (daemon форкается, команда завершается быстро).
 
-## Добавить новый сценарий
+## Добавить тест
 
-1. Создать файл `testbed/<name>_test.go` с функцией `Test<Name>(t *testing.T)`.
+1. Создать `testbed/<name>_test.go`.
 2. Использовать `topology.NewTopology` и типы из `internal/node`.
-3. Зарегистрировать в `Justfile` отдельную команду `just test-<name>`.
+3. Добавить команду в `Justfile`.
 
-Пример минимального теста:
+Минимальный пример:
 
 ```go
-func TestNewScenario(t *testing.T) {
+func TestFoo(t *testing.T) {
     tp := topology.NewTopology(t, 2, "10.77.0")
 
-    peer := node.NewGnunetPeer(t, 0, tp.Nodes[0].NS, tp.Nodes[0].IP, 2200)
-    require.NoError(t, peer.WriteConfig())
-    require.NoError(t, peer.Start())
+    p := node.NewGnunetPeer(t, 0, tp.Nodes[0].NS, tp.Nodes[0].IP, 2200)
+    require.NoError(t, p.WriteConfig())
+    require.NoError(t, p.Start())
 
     ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
     defer cancel()
-    require.NoError(t, peer.WaitCoreConnected(ctx))
+    require.NoError(t, p.WaitCoreConnected(ctx))
 }
 ```
 
-## Добавить новый тип ноды
+## Добавить тип ноды
 
-1. Создать `internal/node/<name>.go` с типом и методами.
-2. Создать `internal/node/<name>.conf.tmpl` — конфиг-шаблон.
-3. Embed шаблон через `//go:embed <name>.conf.tmpl`.
-4. Реализовать минимальный интерфейс: `WriteConfig`, `Start`, `Wait<Condition>`.
+1. `internal/node/<name>.go` — тип с методами `WriteConfig`, `Start`, `Wait*`.
+2. `internal/node/<name>.conf.tmpl` — шаблон конфига.
+3. Embed через `//go:embed <name>.conf.tmpl`.
 
 ## Rust: sam-sender / sam-receiver
 
-Сборка:
-```bash
-just build-rs          # cargo build в rs/
-```
+Сейчас — заглушки (`println!` + `exit(0)`).
 
-Бинари появляются в `rs/target/debug/`. Go-тесты вызывают их через `exec.Command`.
-Путь к бинарю: `rs/target/debug/sam-sender` (или `release` в CI).
+Сборка: `just build-rs` → `rs/target/debug/sam-sender`, `rs/target/debug/sam-receiver`.
 
-Интерфейс (планируется):
+Планируемый интерфейс:
 ```
-sam-sender  --sam <addr:port> --dest <b32> --size <bytes> --seed <n> --out <jsonl>
+sam-sender   --sam <addr:port> --dest <b32> --size <bytes> --seed <n> --out <jsonl>
 sam-receiver --sam <addr:port> --out <jsonl>
 ```
 
-## Docker и CI
+Go-тесты будут вызывать их как субпроцессы через `exec.Command`.
 
-**Образ** (`Dockerfile`):
-- Базовый: `alt:sisyphus`
-- Слой 1: `apt-get install` — gnunet, i2pd, golang, gcc, iputils
-- Слой 2: rustup + `$PATH`
-- Слой 3: `COPY rs/` + `cargo build`
+## Docker
 
-Пересборка нужна только при изменении `Dockerfile` или `rs/`.
-Изменения в `internal/` и `testbed/` подхватываются через volume mount.
+Слои образа:
+1. `alt:sisyphus`
+2. `apt-get install` — gnunet, i2pd, golang, gcc, iputils
+3. rustup + PATH
+4. `COPY rs/` + `cargo build` (заглушки)
 
-**CI** (`.github/workflows/ci.yml`):
-- Триггер: push в `master`/`main`, PR
-- Шаги: checkout → build image → `go test -run TestSmoke -timeout 5m`
+Изменения в `internal/` и `testbed/` не требуют пересборки — они монтируются
+через `-v $(pwd):/practice`.
 
-## I2P base64
+## CI
 
-I2P использует нестандартный base64: `+`→`-`, `/`→`~`, без padding.
-В Go: `base64.RawStdEncoding.EncodeToString(hash)` + ручная замена.
-**Не использовать** `base64.RawURLEncoding` — он даёт `_` вместо `~`.
+`.github/workflows/ci.yml` — push в `master`/`main` и PR:
+1. Checkout
+2. `docker build`
+3. `go test ./testbed/... -run Smoke -timeout 5m` внутри `--privileged` контейнера
 
-## Известные ограничения
-
-- `t.TempDir()` создаёт директории на хосте, но монтируется в контейнер через `-v`.
-  При запуске вне контейнера пути могут не совпасть.
-- `gnunet-arm` требует `GNUNET_HOME` = dataDir при вызове вспомогательных команд
-  (`gnunet-hello`, `gnunet-statistics`) — это задаётся через `GNUNET_HOME` в env или через `-c`.
-- i2pd bootstrap занимает ~55 с — таймауты в тестах должны быть ≥ 90 с.
+На GitHub Actions `sudo` не нужен — `docker` доступен напрямую.

@@ -42,7 +42,7 @@ i2pd version 2.60.0 (0.9.69), Boost 1.86.0, OpenSSL 3.5.4
 gnunet-arm v0.26.2
 ```
 
-**Dockerfile:** `practice/Dockerfile`
+**Dockerfile:** `Dockerfile`
 
 Сборка прошла успешно. Образ `coursework-overlay:latest` готов к использованию.
 
@@ -206,7 +206,7 @@ SAM destination.
 
 По замечанию о логах в контейнере: `just test-transfer` запускался с `--rm`, поэтому
 полные `/root/tmp/TestSAMTransfer.../i2pd.log` исчезали вместе с контейнером. Добавлен
-`TEST_ARTIFACT_DIR=/practice/tmp/test-artifacts/sam-transfer`; при диагностике тест теперь
+`TEST_ARTIFACT_DIR=/workspace/tmp/test-artifacts/sam-transfer`; при диагностике тест теперь
 сохраняет полные `nodeN-i2pd.log` в workspace, доступный с хоста.
 
 Анализ сохранённых логов показал главное отличие от ожидаемого bootstrap:
@@ -260,9 +260,15 @@ SAM destination.
 - `just test` — PASS
 - `just test-transfer` — PASS (`setup≈9012ms`, `transfer≈2ms`, `goodput≈4194 Mbps`, `first_byte≈9324ms`)
 
-`just test-transfer` создаёт временный каталог `/practice/tmp/test-artifacts` внутри
+`just test-transfer` создаёт временный каталог `/workspace/tmp/test-artifacts` внутри
 контейнера перед запуском теста. После успешного прогона каталог `tmp/` удалён через Docker,
 чтобы в рабочей копии не оставались root-owned артефакты, мешающие последующим `go test ./...`.
+
+## Удаление project-specific mount path, 2026-06-04 23:25 +04
+
+По просьбе убраны упоминания старого имени каталога из команд и документации проекта. `Justfile` теперь
+везде монтирует текущий каталог в контейнер как `/workspace`; путь для `TEST_ARTIFACT_DIR`
+также перенесён на `/workspace/tmp/test-artifacts/sam-transfer`.
 
 ## README TODO, 2026-06-04 23:20 +04
 

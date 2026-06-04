@@ -18,7 +18,7 @@ func TestMain(m *testing.M) {
 	if os.Geteuid() != 0 {
 		fmt.Println("Tests must be run as root (for netns/bridge)")
 		os.Exit(0) // Skip instead of fail if not root? No, TASK says fail if not root.
-		// Actually, standard practice for CI is to run as root.
+		// CI commonly runs these privileged network tests as root.
 	}
 
 	// Check dependencies

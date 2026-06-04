@@ -18,7 +18,7 @@ test-i2p:
 
 # Запустить тест переноса данных SAM
 test-transfer:
-    docker run --rm --privileged -v $(pwd):/practice -w /practice coursework-overlay:latest bash -lc 'mkdir -p /practice/tmp/test-artifacts/sam-transfer && go build -buildvcs=false -o /usr/local/bin/sam-sender ./cmd/sam-sender && go build -buildvcs=false -o /usr/local/bin/sam-receiver ./cmd/sam-receiver && TEST_ARTIFACT_DIR=/practice/tmp/test-artifacts/sam-transfer go test ./testbed/... -v -run TestSAMTransfer -timeout 20m'
+    docker run --rm --privileged -v $(pwd):/workspace -w /workspace coursework-overlay:latest bash -lc 'mkdir -p /workspace/tmp/test-artifacts/sam-transfer && go build -buildvcs=false -o /usr/local/bin/sam-sender ./cmd/sam-sender && go build -buildvcs=false -o /usr/local/bin/sam-receiver ./cmd/sam-receiver && TEST_ARTIFACT_DIR=/workspace/tmp/test-artifacts/sam-transfer go test ./testbed/... -v -run TestSAMTransfer -timeout 20m'
 
 # Очистка (удаление временных файлов go тестов вне контейнера если есть)
 clean:

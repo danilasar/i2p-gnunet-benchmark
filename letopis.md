@@ -30,4 +30,18 @@ libminiupnpc.so.21          (для i2pd)
 libstdc++.so.6(CXXABI_1.3.15)       (для i2pd)
 ```
 
-**Решение:** установить зависимости из стандартного репозитория, затем целевые RPM.
+**Решение:** использовать Docker-контейнер на базе `alt:sisyphus` — в нём все нужные версии доступны через стандартный `apt-get install`.
+
+### Docker-образ coursework-overlay:latest
+
+**Базовый образ:** `alt:sisyphus` (docker.io/library/alt:sisyphus)
+
+**Установленные версии (проверено):**
+```
+i2pd version 2.60.0 (0.9.69), Boost 1.86.0, OpenSSL 3.5.4
+gnunet-arm v0.26.2
+```
+
+**Dockerfile:** `practice/Dockerfile`
+
+Сборка прошла успешно. Образ `coursework-overlay:latest` готов к использованию.

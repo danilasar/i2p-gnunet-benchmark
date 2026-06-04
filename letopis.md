@@ -86,3 +86,36 @@ SAM OK: HELLO REPLY RESULT=OK VERSION=3.3
 Четыре изолированных i2pd-нода (10.88.0.1–10.88.0.4, zero-hop) в netns, соединённых через Linux bridge, успешно bootstrapped через ZIP reseed с floodfill RouterInfo node0. Все ноды выполнили DHT exploration через node0 (floodfill). SAM bridge готов к приёму соединений.
 
 **Метод детекции связности:** `NetDbReq: Exploring new N routers` — нода отправила DHT exploration query к floodfill. Означает наличие NTCP2-соединения с floodfill.
+
+## Реструктуризация: Go + Rust + Python
+
+### Решение об инструментарии
+После smoke-тестов на shell-скриптах принято решение перейти на структурированный стек:
+- **Go** (`go test`) — оркестратор, управление нодами, интеграционные тесты
+- **Rust** — sender/receiver для измерений (пока заглушки)
+- **Python** — анализ данных (pandas, bootstrap CI, графики)
+
+Обоснование выбора Go: `t.Cleanup()` для гарантированного teardown, горутины для параллельного управления нодами, строгая типизация, нет GC-пауз в инфра-коде.
+
+### Первичная реализация (агент по ТЗ)
+
+Агент создал структуру: `internal/topology`, `internal/node/{gnunet,i2pd}.go`, `testbed/smoke_test.go`, Rust workspace (`rs/`), `analysis/`, `Justfile`.
+
+**Найденные и исправленные критические баги:**
+
+- `go.mod`: версия `go 1.26.3` — не существует. Исправлено на актуальную.
+- `internal/node/i2pd.go` `CreateReseedZip`: использовал `base64.RawURLEncoding` (`/`→`_`), тогда как i2pd ожидает I2P-base64 (`/`→`~`). ZIP содержал неверные имена файлов — bootstrap не работал. **Исправлено:** `base64.RawStdEncoding` + ручная замена `+`→`-`, `/`→`~`.
+- `internal/node/gnunet.go` `Start()`: использовал `CombinedOutput()` — блокирующий вызов, ждущий завершения демона `gnunet-arm`. Тест зависал навсегда. **Исправлено:** `cmd.Start()`.
+- `i2pd.conf.tmpl`: всегда рендерил `zipfile = ` (пустая строка) для floodfill-ноды. **Исправлено:** `{{if .ZipFile}}` блок.
+- `gnunet.conf.tmpl`: `GNUNET_RUNTIME_DIR`, `GNUNET_CACHE_HOME` были в несуществующей секции `[GLOBAL]`. **Исправлено:** перенесены в `[PATHS]`.
+- Отсутствовали `.gitignore` и `.dockerignore` — `rs/target/` попадал в репо и образ. **Исправлено:** добавлены оба файла.
+
+### Результат
+
+`just test` (внутри `--privileged` контейнера):
+```
+TestGnunetSmoke — PASS (~14 сек)
+TestI2pdSmoke   — PASS (~77 сек)
+```
+
+Структура проекта готова. Следующий шаг — реализация SAM STREAM sender/receiver на Rust (`rs/`).

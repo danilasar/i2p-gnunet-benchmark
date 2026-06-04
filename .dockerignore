@@ -1,0 +1,4 @@
+rs/target/
+rs/**/target/
+.git/
+*.log

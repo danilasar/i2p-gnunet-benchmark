@@ -1,0 +1,33 @@
+[reseed]
+urls =
+threshold = 50
+{{if .ZipFile}}zipfile = {{.ZipFile}}{{end}}
+verify = false
+
+[ntcp2]
+enabled = true
+published = true
+port = {{.Port}}
+
+[ssu2]
+enabled = false
+
+[httpproxy]
+enabled = false
+
+[socksproxy]
+enabled = false
+
+[http]
+enabled = false
+
+[exploratory]
+inbound.length = 0
+outbound.length = 0
+inbound.quantity = 2
+outbound.quantity = 2
+
+[sam]
+enabled = {{.SAMEnabled}}
+address = 127.0.0.1
+port = {{.SAMPort}}

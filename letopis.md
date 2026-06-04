@@ -45,3 +45,29 @@ gnunet-arm v0.26.2
 **Dockerfile:** `practice/Dockerfile`
 
 Сборка прошла успешно. Образ `coursework-overlay:latest` готов к использованию.
+
+**Ошибки при установке на хосте (зафиксированы для истории):**
+- Попытка `rpm -ivh <URL>` — rpm не умеет качать по HTTP напрямую
+- Попытка установить зависимости из p11: `libboost_program_options` (в репо нет), `libminiupnpc17` (нужна .so.21), `libstdc++6` до GCC 14 (нет CXXABI_1.3.15)
+- Попытка Dockerfile с `libboost_program_options` — в sisyphus пакет называется `libboost_program_options1.86.0`
+- **Решение:** просто `apt-get install gnunet libgnunet i2pd` в sisyphus-контейнере — всё доступно
+
+### Smoke-тест GNUnet
+
+**Ошибки при написании smoke_gnunet.sh:**
+- Использовал `ping` для проверки underlay — ping не установлен в контейнере. Заменил на проверку `ip addr show`.
+- `gnunet-peerinfo` отсутствует в GNUnet 0.26.2 — удалён, заменён новыми инструментами.
+- В конфиге `[transport] PLUGINS = tcp` — в 0.26 нет плагинов, используются communicators (`gnunet-communicator-tcp`). Переписал конфиг под 0.26 с `@INLINE@` стандартных конфигов и override для `[communicator-tcp]`.
+- Попытка `gnunet-peerinfo -s` для получения peer ID — команда не существует в 0.26.
+- Секция `[hostlist]` требует явного `SERVERS =` (пустая строка), иначе warning о внешнем bootstrap.
+
+**Результат smoke_gnunet.sh:**
+```
+[PASS] Peers установили CORE-соединение!
+core-api DEBUG Received notification about connection from `D88W'.
+```
+Два изолированных GNUnet-пира в netns (`10.99.0.1` и `10.99.0.2`) успешно обменялись HELLO и установили CORE-соединение через TCP communicator. Детекция через grep в логах gnunet-service-arm.
+
+### Smoke-тест i2pd
+
+Следующий шаг: аналогичный тест для i2pd — две ноды в netns, pre-populated netDb, проверка туннельной связности.

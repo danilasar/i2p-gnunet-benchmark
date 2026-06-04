@@ -70,4 +70,19 @@ core-api DEBUG Received notification about connection from `D88W'.
 
 ### Smoke-тест i2pd
 
-Следующий шаг: аналогичный тест для i2pd — две ноды в netns, pre-populated netDb, проверка туннельной связности.
+**Ошибки и тупиковые пути:**
+- `--reseed.urls=` (пустое значение) не работает через CLI: "the argument for option '--reseed.urls' should follow immediately after the equal sign". Решение: только через config-файл `[reseed] urls =`.
+- `threshold = 0` отключает не только внешний reseed, но и локальный ZIP reseed. Решение: `threshold = 50`.
+- Прямое копирование `router.info` в netDb/: нужно правильное имя файла `routerInfo-<SHA256_hash>.dat` в поддиректории. Написан `ri_to_netdb.py`.
+- Попытка cross-populate без floodfill: ноды грузят RouterInfo но не подключаются — нет floodfill для bootstrap. Обнаружено: в RouterInfo caps есть ДВА поля `caps` — одно в адресном блоке NTCP2 (значение "4"), другое в глобальных опциях (значение "Xf" для floodfill). i2pd корректно распознаёт "Xf" при загрузке через ZIP reseed.
+- Попытка netns star-topology с /30 подсетями: слишком сложно, заменена на bridge-топологию.
+- 30 секунд ожидания недостаточно — bootstrap через floodfill занимает ~55 секунд. Установлено `WAIT_CONNECT=70`.
+
+**Итог smoke_i2pd.sh:**
+```
+[PASS] 4/4 нод активны в DHT exploration (соединения установлены)!
+SAM OK: HELLO REPLY RESULT=OK VERSION=3.3
+```
+Четыре изолированных i2pd-нода (10.88.0.1–10.88.0.4, zero-hop) в netns, соединённых через Linux bridge, успешно bootstrapped через ZIP reseed с floodfill RouterInfo node0. Все ноды выполнили DHT exploration через node0 (floodfill). SAM bridge готов к приёму соединений.
+
+**Метод детекции связности:** `NetDbReq: Exploring new N routers` — нода отправила DHT exploration query к floodfill. Означает наличие NTCP2-соединения с floodfill.

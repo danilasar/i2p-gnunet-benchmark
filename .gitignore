@@ -4,3 +4,4 @@ rs/**/target/
 .pytest_cache/
 __pycache__/
 *.log
+tmp/

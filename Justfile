@@ -16,9 +16,9 @@ test-gnunet:
 test-i2p:
     docker run --rm --privileged -v $(pwd):/workspace -w /workspace coursework-overlay:latest go test ./testbed/... -v -run TestI2pdSmoke -timeout 3m
 
-# Сборка Rust бинарников
-build-rs:
-    cd rs && cargo build
+# Запустить тест переноса данных SAM
+test-transfer:
+    docker run --rm --privileged -v $(pwd):/workspace -w /workspace coursework-overlay:latest bash -lc 'mkdir -p /workspace/tmp/test-artifacts/sam-transfer && go build -buildvcs=false -o /usr/local/bin/sam-sender ./cmd/sam-sender && go build -buildvcs=false -o /usr/local/bin/sam-receiver ./cmd/sam-receiver && TEST_ARTIFACT_DIR=/workspace/tmp/test-artifacts/sam-transfer go test ./testbed/... -v -run TestSAMTransfer -timeout 20m'
 
 # Очистка (удаление временных файлов go тестов вне контейнера если есть)
 clean:

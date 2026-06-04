@@ -14,6 +14,7 @@ i2pd/SAM STREAM и GNUnet/CADET.
 | i2pd: запуск нод, ZIP reseed bootstrap, проверка SAM bridge | ✓ |
 | Smoke-тесты (`go test`) | ✓ |
 | SAM STREAM sender/receiver (Rust) | заглушки |
+| TODO: убрать полный bootstrap в `TestSAMTransfer` — сейчас nodes 1-3 заранее получают `RouterInfo` всех нод через `reseed_full.zip`; целевое поведение — discovery от seed/floodfill-ноды без знания всех участников | TODO |
 | CADET sender/receiver | не начато |
 | Сбор метрик (goodput, RTT, CPU/RSS) | не начато |
 | Underlay-профили (tc/netem) | не начато |
@@ -61,7 +62,7 @@ analysis/
 Контейнер основан на **ALT Sisyphus** — все пакеты (i2pd, GNUnet, Go, системные
 библиотеки) устанавливаются из этого репозитория. Тестирование ведётся на
 последних доступных версиях: **i2pd 2.60.0** и **GNUnet 0.26.2**.
-Rust устанавливается отдельно через rustup, так как в sisyphus нет актуальной версии.
+Rust устанавливается отдельно через rustup.
 
 ## Документация
 

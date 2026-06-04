@@ -14,14 +14,10 @@ RUN apt-get update && apt-get install -y \
     iputils \
     && apt-get clean
 
-RUN apt-get install -y iputils
-
-# Install Rust via rustup
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-ENV PATH="/root/.cargo/bin:${PATH}"
-
 WORKDIR /workspace
 
-# Build rust stubs
-COPY rs /workspace/rs
-RUN cd /workspace/rs && cargo build
+
+# Build binaries
+COPY . /workspace
+RUN go build -o /usr/local/bin/sam-sender ./cmd/sam-sender/
+RUN go build -o /usr/local/bin/sam-receiver ./cmd/sam-receiver/

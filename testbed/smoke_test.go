@@ -18,7 +18,7 @@ func TestMain(m *testing.M) {
 	if os.Geteuid() != 0 {
 		fmt.Println("Tests must be run as root (for netns/bridge)")
 		os.Exit(0) // Skip instead of fail if not root? No, TASK says fail if not root.
-		// Actually, standard practice for CI is to run as root.
+		// CI commonly runs these privileged network tests as root.
 	}
 
 	// Check dependencies
@@ -35,13 +35,13 @@ func TestMain(m *testing.M) {
 
 func TestGnunetSmoke(t *testing.T) {
 	tp := topology.NewTopology(t, 2, "10.99.0")
-	
+
 	peers := make([]*node.GnunetPeer, 2)
 	for i := 0; i < 2; i++ {
 		peers[i] = node.NewGnunetPeer(t, i, tp.Nodes[i].NS, tp.Nodes[i].IP, 2101+i)
 		err := peers[i].WriteConfig()
 		require.NoError(t, err)
-		
+
 		err = peers[i].Start()
 		require.NoError(t, err)
 	}
@@ -73,9 +73,9 @@ func TestGnunetSmoke(t *testing.T) {
 
 func TestI2pdSmoke(t *testing.T) {
 	tp := topology.NewTopology(t, 4, "10.88.0")
-	
+
 	nodes := make([]*node.I2pdNode, 4)
-	
+
 	// Node 0: floodfill
 	nodes[0] = node.NewI2pdNode(t, 0, tp.Nodes[0].NS, tp.Nodes[0].IP, 12000, true)
 	nodes[0].SAMPort = 17656
@@ -83,7 +83,9 @@ func TestI2pdSmoke(t *testing.T) {
 	require.NoError(t, nodes[0].Start())
 
 	t.Log("Waiting for floodfill node to generate RouterInfo...")
-	time.Sleep(12 * time.Second)
+	ffCtx, cancelFF := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancelFF()
+	require.NoError(t, nodes[0].WaitRouterInfoFloodfill(ffCtx))
 
 	zipPath := filepath.Join(t.TempDir(), "reseed.zip")
 	err := nodes[0].CreateReseedZip(zipPath)
@@ -113,7 +115,7 @@ func TestI2pdSmoke(t *testing.T) {
 func checkSAM(t *testing.T, ns string, port int) {
 	// We need to run the check inside the namespace to reach 127.0.0.1:port of i2pd
 	// Or we could use the node's IP if SAM was bound to it. But task says 127.0.0.1.
-	
+
 	cmdStr := fmt.Sprintf("exec 3<>/dev/tcp/127.0.0.1/%d && echo 'HELLO VERSION MIN=3.0 MAX=3.3' >&3 && head -n 1 <&3", port)
 	cmd := exec.Command("ip", "netns", "exec", ns, "bash", "-c", cmdStr)
 	out, err := cmd.CombinedOutput()

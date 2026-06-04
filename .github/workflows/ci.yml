@@ -13,12 +13,12 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build Docker image
-        run: cd practice && docker build -t coursework-overlay:latest .
+        run: docker build -t coursework-overlay:latest .
 
       - name: Run smoke tests
         run: |
           docker run --rm --privileged \
-            -v ${{ github.workspace }}/practice:/practice \
-            -w /practice \
+            -v ${{ github.workspace }}:/workspace \
+            -w /workspace \
             coursework-overlay:latest \
             go test ./testbed/... -v -run Smoke -timeout 5m

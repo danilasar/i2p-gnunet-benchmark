@@ -128,7 +128,7 @@ Go-тесты будут вызывать их как субпроцессы ч�
 4. `COPY rs/` + `cargo build` (заглушки)
 
 Изменения в `internal/` и `testbed/` не требуют пересборки — они монтируются
-через `-v $(pwd):/practice`.
+через `-v $(pwd):/workspace -w /workspace`.
 
 ## CI
 

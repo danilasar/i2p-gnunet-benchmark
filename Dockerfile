@@ -20,8 +20,8 @@ RUN apt-get install -y iputils
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 ENV PATH="/root/.cargo/bin:${PATH}"
 
-WORKDIR /practice
+WORKDIR /workspace
 
 # Build rust stubs
-COPY rs /practice/rs
-RUN cd /practice/rs && cargo build
+COPY rs /workspace/rs
+RUN cd /workspace/rs && cargo build

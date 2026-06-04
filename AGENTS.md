@@ -10,8 +10,8 @@
 
 - **ОС хоста:** ALT Workstation K 11.3 (Nemorosa), ядро 6.12-alt1
 - **Контейнер:** Docker, образ `coursework-overlay:latest` на базе `alt:sisyphus`
-  - Сборка: `sudo docker build -t coursework-overlay:latest .` из директории practice/
-  - Запуск: `sudo docker run --rm --privileged -v $(pwd):/practice coursework-overlay:latest bash /practice/<script.sh>`
+  - Сборка: `sudo docker build -t coursework-overlay:latest .`
+  - Запуск: `sudo docker run --rm --privileged -v $(pwd):/workspace -w /workspace coursework-overlay:latest <команда>`
 - **Версии ПО в контейнере:** i2pd 2.60.0, GNUnet 0.26.2, Python 3.x с networkx
 
 ## Правила ведения летописи
@@ -38,49 +38,44 @@ docs: обновлён AGENTS.md
 ## Структура проекта
 
 ```
-practice/
+.
 ├── go.mod / go.sum           # Go-модуль (оркестратор, тесты)
 ├── Cargo.toml                # Rust workspace (sender/receiver)
 ├── Dockerfile                # alt:sisyphus + gnunet + i2pd + go + rust
+├── Justfile                  # команды сборки и запуска тестов
 ├── AGENTS.md                 # этот файл
 ├── letopis.md                # хронология действий
 │
 ├── internal/
-│   ├── topology/             # netns, veth, bridge, tc/netem
-│   ├── node/
-│   │   ├── gnunet.go         # GnunetNode
-│   │   └── i2pd.go           # I2pdNode
-│   ├── config/               # генератор конфигов
-│   └── metrics/              # сбор CPU/RSS, JSONL
+│   ├── topology/             # netns, veth, bridge
+│   └── node/
+│       ├── gnunet.go         # GnunetPeer
+│       └── i2pd.go           # I2pdNode
 │
 ├── testbed/
-│   ├── smoke_test.go         # TestGnunetSmoke, TestI2pdSmoke
-│   ├── pilot_test.go
-│   └── main_test.go
+│   └── smoke_test.go         # TestGnunetSmoke, TestI2pdSmoke
 │
 ├── rs/
-│   ├── Cargo.toml
-│   ├── sam-sender/
-│   └── sam-receiver/
+│   ├── sam-sender/           # заглушка
+│   └── sam-receiver/         # заглушка
 │
 ├── analysis/
-│   ├── analyzer.py
-│   └── requirements.txt
+│   └── analyzer.py           # заглушка
 │
-└── .github/
-    └── workflows/
-        └── ci.yml
+└── .github/workflows/ci.yml
 ```
 
 ## Запуск тестов
 
 ```bash
-# Smoke-тесты (изнутри контейнера)
-go test ./testbed/... -v -run TestSmoke -timeout 3m
+# Из корня репозитория
+just test                    # все smoke-тесты в контейнере
+just test-gnunet             # только GNUnet
+just test-i2p                # только i2pd
 
-# Прямой запуск старых sh-скриптов (legacy, для справки)
-sudo docker run --rm --privileged -v $(pwd):/practice \
-    coursework-overlay:latest bash /practice/smoke_gnunet.sh
+# Вручную (эквивалент just test)
+sudo docker run --rm --privileged -v $(pwd):/workspace -w /workspace \
+    coursework-overlay:latest go test ./testbed/... -v -run Smoke -timeout 5m
 ```
 
 ## Известные особенности

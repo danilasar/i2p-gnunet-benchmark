@@ -81,6 +81,11 @@ Bootstrap i2pd: node0 стартует как floodfill, его `router.info` у
 - I2P base64: стандартный base64 с заменой `+`→`-` и `/`→`~` (не URL-safe encoding)
 - Reseed ZIP для i2pd требует `threshold ≥ 1` в `[reseed]`; `threshold = 0` отключает всё включая локальный ZIP
 
+## Документация
+
+- [docs/experimenter.md](docs/experimenter.md) — как проводить измерения: arms, профили, размеры нагрузки, порядок прогонов, типичные ошибки
+- [docs/developer.md](docs/developer.md) — архитектура, пакеты, конвенции, как добавить сценарий или тип ноды
+
 ## CI
 
 GitHub Actions запускает smoke-тесты при каждом push в `master` и в PR.

@@ -16,6 +16,7 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /workspace
 
+
 # Build binaries
 COPY . /workspace
 RUN go build -o /usr/local/bin/sam-sender ./cmd/sam-sender/

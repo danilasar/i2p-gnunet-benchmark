@@ -14,7 +14,7 @@ test-gnunet:
 
 # Запустить только I2P smoke
 test-i2p:
-    docker run --rm --privileged -v $(pwd):/practice -w /practice coursework-overlay:latest go test ./testbed/... -v -run TestI2pdSmoke -timeout 3m
+    docker run --rm --privileged -v $(pwd):/workspace -w /workspace coursework-overlay:latest go test ./testbed/... -v -run TestI2pdSmoke -timeout 3m
 
 # Запустить тест переноса данных SAM
 test-transfer:

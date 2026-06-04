@@ -270,6 +270,14 @@ SAM destination.
 везде монтирует текущий каталог в контейнер как `/workspace`; путь для `TEST_ARTIFACT_DIR`
 также перенесён на `/workspace/tmp/test-artifacts/sam-transfer`.
 
+Проверки после изменения mount path:
+- поиск старого имени каталога по репозиторию — совпадений нет;
+- `go test ./...` — PASS;
+- `just test-i2p` — PASS;
+- `just test-transfer` — PASS (`setup≈12012ms`, `transfer≈3ms`, `goodput≈2796 Mbps`, `first_byte≈12323ms`).
+
+После `just test-transfer` удалён созданный контейнером каталог `/workspace/tmp`.
+
 ## README TODO, 2026-06-04 23:20 +04
 
 По замечанию о текущем bootstrap в `TestSAMTransfer` добавлен пункт TODO в таблицу README:

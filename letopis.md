@@ -540,6 +540,58 @@ benchmark-трафика и не добавлять лишние SAM control-с�
 - real i2pd integration tests для reusable keyfile: создать ключи, сохранить, пересоздать
   session с тем же private key и проверить стабильность destination/приём stream.
 
+## SamError: типизированные ошибки SAM-протокола, 2026-06-05
+
+### Что сделано
+
+- Новый модуль `sam3/src/error.rs` с `enum SamError`: варианты для всех RESULT-кодов протокола
+  (`DuplicatedDest`, `DuplicatedId`, `CantReachPeer`, `KeyNotFound`, `InvalidKey`, `InvalidId`,
+  `Timeout`, `SessionNotFound`, `NotASession`, `I2PError(String)`, `UnexpectedResponse(String)`,
+  `Io(String)`).
+- `SamError::from_result_line` — парсит строку ответа SAM через `parse_fields`, возвращает
+  конкретный вариант.
+- `Display` выводит протокольные строки: `CANT_REACH_PEER`, `I2P_ERROR: msg`, etc.
+- `impl From<io::Error>` для прозрачной конвертации.
+- Всё публичное API `session.rs` переведено с `Box<dyn Error>` на `Result<T, SamError>`.
+- `SamSession`, `StreamSession`, `SamClient` получили `#[derive(Debug)]`.
+- `parse_fields` стала `pub(crate)` для использования из `error.rs` без дублирования.
+
+### Проблемы при реализации
+
+**`unwrap_err()` требует `Debug` для типа успеха** — без `#[derive(Debug)]` на `SamSession`/
+`StreamSession` тесты не компилировались. Решение: добавить derive.
+
+**`generate_keys_on` с неверной логикой** — в первой итерации добавлена проверка
+`if !line.contains("DEST REPLY")`, из-за которой ошибки SAM, пришедшие в нестандартном
+формате, превращались в `UnexpectedResponse` вместо конкретного варианта. Отлаживали через
+временное тегирование сообщений об ошибке. Итог: проверка `contains` избыточна и удалена;
+логика сведена к `if fields.get("RESULT").is_some_and(|v| v != "OK")` — как в исходной
+версии до рефакторинга.
+
+**Доступ к `parse_fields` из `error.rs`** — функция была приватной в `session.rs`.
+Сделана `pub(crate)`, чтобы `from_result_line` использовал единый парсер (с поддержкой
+кавычек и экранирования).
+
+**`UnexpectedResponse` вместо `DuplicatedId` в интеграционном тесте** — следствие проблемы
+с `generate_keys_on` выше. `create_stream` вызывает `generate_keys_on` первым; ошибка
+перехватывалась там с неверной классификацией до того, как SESSION CREATE даже отправлялся.
+
+### Найдено при ревью и исправлено
+
+- **`Display` делегировал `Debug`** (`write!(f, "{:?}", self)`) — производил Rust-синтаксис
+  `CantReachPeer` вместо `CANT_REACH_PEER`. Заменён явным match.
+- **Unused import `std::error`** в `session.rs` — удалён.
+- **Избыточная `contains("DEST REPLY")` проверка** в `generate_keys_on` — удалена
+  (описано выше).
+
+### Проверки
+
+- 6 unit-тестов для `SamError` в `error.rs` — PASS.
+- 2 новых интеграционных теста в `fake_sam.rs` (`connect_stream_returns_cant_reach_peer`,
+  `session_create_returns_duplicated_id`) — PASS.
+- `cargo test -p sam3` — 31 тест, PASS, 0 предупреждений.
+- `cargo test --workspace --no-run` — PASS.
+
 ## SamConn: типизированное соединение с metadata, 2026-06-05
 
 Реализован `SamConn` в `sam3/src/session.rs` по ТЗ (TDD).

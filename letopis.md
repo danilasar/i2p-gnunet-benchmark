@@ -858,6 +858,70 @@ result только после EOF» Rust-тест, читающий result до
 - `cargo check --workspace` — PASS.
 - `go build ./go-compat` — PASS.
 
+## STREAM FORWARD (ForwardGuard), 2026-06-05
+
+Реализована команда `STREAM FORWARD` протокола SAM v3.3. Позволяет поручить SAM-мосту
+самостоятельно принимать входящие I2P-соединения и форвардить их на локальный TCP-порт.
+
+### Контекст
+
+В go-i2p/sam3 эта функциональность явно отмечена как нерабочая (`README: "Does not work:
+Stream Forwarding"`). Реализация написана по официальной спецификации SAM v3.3 и
+с опорой на синхронную реализацию в библиотеке yosemite 0.7.0 (Rust).
+
+### Wire-format
+
+```
+→ (новое TCP-соединение)
+HELLO VERSION MIN=3.0 MAX=3.3
+← HELLO REPLY RESULT=OK VERSION=3.3
+→ STREAM FORWARD ID=<id> PORT=<port> SILENT=<true|false>
+← STREAM STATUS RESULT=OK
+```
+
+Пока это соединение открыто — мост форвардит входящие I2P-соединения на `port`.
+Закрытие соединения = прекращение форвардинга.
+
+### Что сделано
+
+**`ForwardGuard` в `sam3/src/session.rs`:**
+```rust
+pub struct ForwardGuard(#[allow(dead_code)] TcpStream);
+```
+RAII-обёртка: держит TCP-соединение открытым. При дропе — соединение закрывается,
+мост прекращает форвардинг. `#[allow(dead_code)]` — идиоматично для RAII-обёрток,
+поле существует ради `Drop`, а не ради чтения.
+
+**Метод `StreamSession::forward(&self, port: u16, silent: bool)`:**
+1. Открывает новое TCP-соединение к SAM (отдельно от control-сокета сессии)
+2. `HELLO`
+3. `STREAM FORWARD ID={} PORT={port} SILENT={silent}\n`
+4. Читает `STREAM STATUS RESULT=OK` через `ensure_ok`
+5. Возвращает `ForwardGuard(stream)`
+
+**Unit-тесты (3 штуки в `#[cfg(test)] mod tests`):**
+- `stream_forward_sends_correct_command` — проверяет wire-format с `SILENT=false`.
+- `stream_forward_silent_sends_silent_true` — проверяет `SILENT=true`.
+- `stream_forward_guard_drop_closes_connection` — дропает `ForwardGuard` внутри
+  блока; FakeSam-обработчик форвард-соединения убеждается что получает EOF (`read` = 0).
+
+**`ForwardGuard` экспортирован из `lib.rs`.**
+
+### Нетривиальные решения
+
+**Три TCP-соединения для `new_transient_stream_session` + `forward()`** —
+в первых версиях тестов `FakeSam::spawn_many` был настроен на два обработчика, но
+`forward()` создаёт третье соединение. Тесты падали с `Broken pipe`. Исправлено
+добавлением явного обработчика для форвард-соединения.
+
+**`ensure_ok` универсален** — парсит `RESULT=OK` по ключу, не зависит от префикса
+(`SESSION STATUS` или `STREAM STATUS`). Работает корректно для ответа на STREAM FORWARD.
+
+### Проверки
+
+- `cargo test -p sam3 stream_forward_` — 3 теста, PASS.
+- `cargo check --workspace` — PASS, 0 предупреждений.
+
 ## PrimarySession, 2026-06-05
 
 Реализован тип `PrimarySession` (`SESSION CREATE STYLE=PRIMARY`) и `StreamSubSession`.

@@ -757,6 +757,9 @@ pub struct StreamSession {
     session: SamSession,
 }
 
+#[derive(Debug)]
+pub struct ForwardGuard(#[allow(dead_code)] TcpStream);
+
 impl StreamSession {
     pub fn id(&self) -> &str {
         &self.id
@@ -804,6 +807,20 @@ impl StreamSession {
             id: self.id.clone(),
             local: self.destination().clone(),
         }
+    }
+
+    pub fn forward(&self, port: u16, silent: bool) -> Result<ForwardGuard, crate::SamError> {
+        let mut stream = TcpStream::connect(&self.sam_addr)?;
+        hello(&mut stream)?;
+        write!(
+            stream,
+            "STREAM FORWARD ID={} PORT={port} SILENT={silent}\n",
+            self.id
+        )?;
+        stream.flush()?;
+        let line = read_line(&mut stream)?;
+        ensure_ok(&line)?;
+        Ok(ForwardGuard(stream))
     }
 }
 
@@ -1783,6 +1800,103 @@ mod tests {
             .unwrap();
         let sub = primary.new_stream_sub_session("sub_stream").unwrap();
         let _conn = sub.dial("target_dest").unwrap();
+        server.join();
+    }
+
+    #[test]
+    fn stream_forward_sends_correct_command() {
+        let server = FakeSam::spawn_many(vec![
+            Box::new(|mut stream| {
+                expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+                writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+                expect_line(&mut stream, "DEST GENERATE SIGNATURE_TYPE=7");
+                writeln!(stream, "DEST REPLY PUB=pubdest PRIV=privdest").unwrap();
+                let _ = read_line(&mut stream);
+                writeln!(stream, "SESSION STATUS RESULT=OK").unwrap();
+            }),
+            Box::new(|mut stream| {
+                expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+                writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+                expect_line(
+                    &mut stream,
+                    "STREAM FORWARD ID=test_session PORT=8080 SILENT=false",
+                );
+                writeln!(stream, "STREAM STATUS RESULT=OK").unwrap();
+            }),
+        ]);
+
+        let client = SamClient::connect(&server.addr);
+        let session = client
+            .new_transient_stream_session("test_session", &SessionOptions::zero_hop())
+            .unwrap();
+        let _guard = session.forward(8080, false).unwrap();
+        server.join();
+    }
+
+    #[test]
+    fn stream_forward_silent_sends_silent_true() {
+        let server = FakeSam::spawn_many(vec![
+            Box::new(|mut stream| {
+                expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+                writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+                expect_line(&mut stream, "DEST GENERATE SIGNATURE_TYPE=7");
+                writeln!(stream, "DEST REPLY PUB=pubdest PRIV=privdest").unwrap();
+                let _ = read_line(&mut stream);
+                writeln!(stream, "SESSION STATUS RESULT=OK").unwrap();
+            }),
+            Box::new(|mut stream| {
+                expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+                writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+                expect_line(
+                    &mut stream,
+                    "STREAM FORWARD ID=test_session PORT=8080 SILENT=true",
+                );
+                writeln!(stream, "STREAM STATUS RESULT=OK").unwrap();
+            }),
+        ]);
+
+        let client = SamClient::connect(&server.addr);
+        let session = client
+            .new_transient_stream_session("test_session", &SessionOptions::zero_hop())
+            .unwrap();
+        let _guard = session.forward(8080, true).unwrap();
+        server.join();
+    }
+
+    #[test]
+    fn stream_forward_guard_drop_closes_connection() {
+        let server = FakeSam::spawn_many(vec![
+            Box::new(|mut stream| {
+                expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+                writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+                expect_line(&mut stream, "DEST GENERATE SIGNATURE_TYPE=7");
+                writeln!(stream, "DEST REPLY PUB=pubdest PRIV=privdest").unwrap();
+                let _ = read_line(&mut stream);
+                writeln!(stream, "SESSION STATUS RESULT=OK").unwrap();
+            }),
+            Box::new(|mut stream| {
+                expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+                writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+                expect_line(
+                    &mut stream,
+                    "STREAM FORWARD ID=test_session PORT=8080 SILENT=false",
+                );
+                writeln!(stream, "STREAM STATUS RESULT=OK").unwrap();
+
+                let mut buf = [0u8; 1];
+                let res = stream.read(&mut buf);
+                assert!(res.is_ok());
+                assert_eq!(res.unwrap(), 0); // EOF
+            }),
+        ]);
+
+        let client = SamClient::connect(&server.addr);
+        let session = client
+            .new_transient_stream_session("test_session", &SessionOptions::zero_hop())
+            .unwrap();
+        {
+            let _guard = session.forward(8080, false).unwrap();
+        }
         server.join();
     }
 

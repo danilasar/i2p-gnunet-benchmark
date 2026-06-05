@@ -1,8 +1,9 @@
 pub mod messages;
 pub mod payload;
 pub mod receiver;
-mod sam3;
 pub mod sender;
+pub mod session;
 pub mod wire;
 
 pub use messages::{ReadyMsg, ResultMsg};
+pub use session::{SamSession, SAM_TUNNEL_OPTIONS};

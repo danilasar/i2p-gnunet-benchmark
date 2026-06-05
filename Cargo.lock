@@ -699,8 +699,8 @@ name = "sam-receiver"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "sam3",
  "serde_json",
- "testbed",
 ]
 
 [[package]]
@@ -708,8 +708,17 @@ name = "sam-sender"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "sam3",
  "serde_json",
- "testbed",
+]
+
+[[package]]
+name = "sam3"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -838,6 +847,7 @@ dependencies = [
  "base64",
  "libc",
  "minijinja",
+ "sam3",
  "serde",
  "serde_json",
  "sha2",

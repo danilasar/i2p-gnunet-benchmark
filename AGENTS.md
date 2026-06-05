@@ -35,13 +35,13 @@
 ├── Justfile                  # команды сборки и запуска тестов
 ├── AGENTS.md
 ├── letopis.md
-├── sam-sender/               # CLI sender
-├── sam-receiver/             # CLI receiver
+├── sam3/                     # SAM3 library: protocol, payload, wire, workflows
+├── sam-sender/               # CLI sender over sam3
+├── sam-receiver/             # CLI receiver over sam3
 ├── testbed/
 │   ├── src/
 │   │   ├── topology.rs       # netns, veth, bridge
 │   │   ├── node/             # GnunetPeer, I2pdNode
-│   │   └── sam/              # SAM3, wire, payload, sender/receiver
 │   ├── templates/            # i2pd/GNUnet конфиги
 │   └── tests/                # smoke и transfer тесты
 ├── analysis/

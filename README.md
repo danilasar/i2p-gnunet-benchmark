@@ -41,13 +41,13 @@ Linux network namespaces, veth-пары и bridge.
 ```
 Cargo.toml
 Cargo.lock
+sam3/                библиотека SAM3 + wire/payload + sender/receiver workflows
 sam-sender/          Rust CLI для SAM STREAM отправителя
 sam-receiver/        Rust CLI для SAM STREAM получателя
 testbed/
   src/
     topology.rs      netns, veth, bridge
     node/            i2pd и GNUnet node wrappers
-    sam/             SAM3, wire protocol, payload, sender/receiver
   templates/         i2pd/GNUnet конфиги
   tests/             test_gnunet_smoke, test_i2pd_smoke, test_sam_transfer
 analysis/

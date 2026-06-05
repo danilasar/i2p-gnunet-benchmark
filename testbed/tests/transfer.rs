@@ -1,3 +1,4 @@
+use sam3::{ReadyMsg, ResultMsg};
 use serde_json::Value;
 use std::{
     error::Error,
@@ -11,7 +12,6 @@ use std::{
 };
 use testbed::{
     node::i2pd::{create_multi_reseed_zip, I2pdNode},
-    sam::{ReadyMsg, ResultMsg},
     topology::Topology,
 };
 

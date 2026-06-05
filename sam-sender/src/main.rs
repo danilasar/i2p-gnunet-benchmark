@@ -1,9 +1,9 @@
 use clap::Parser;
+use sam3::sender::{run_sender, SenderConfig};
 use std::{
     process,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use testbed::sam::sender::{run_sender, SenderConfig};
 
 #[derive(Parser)]
 struct Args {

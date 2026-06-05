@@ -9,7 +9,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use super::sam3::{SamSession, SAM_TUNNEL_OPTIONS};
+use super::session::{SamSession, SAM_TUNNEL_OPTIONS};
 
 pub struct ReceiverConfig {
     pub sam_addr: String,

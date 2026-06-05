@@ -31,7 +31,7 @@ CPU/RAM.
 
 ## Что не реализовано (запланировано)
 
-- Sender/receiver для SAM STREAM (Arm A, B) — Rust, `sam-sender`, `sam-receiver`
+- Полная серия Arm A/B для SAM STREAM с разными tunnel lengths
 - Sender/receiver для CADET (Arm C)
 - Наложение underlay-профилей через `tc netem`
 - Сбор метрик (goodput, RTT, CPU/RSS) и запись в JSONL

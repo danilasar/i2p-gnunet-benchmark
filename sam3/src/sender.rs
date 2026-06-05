@@ -8,7 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use super::sam3::{SamSession, SAM_TUNNEL_OPTIONS};
+use super::session::{SamSession, SAM_TUNNEL_OPTIONS};
 
 pub struct SenderConfig {
     pub sam_addr: String,

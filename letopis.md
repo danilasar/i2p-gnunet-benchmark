@@ -385,3 +385,28 @@ README, AGENTS, developer/experimenter docs и CI обновлены под ко
 (`receiver did not send result message`). Решение на этот момент: не начинать выделение
 SAM-интерфейсов в отдельную библиотеку до коммита текущего состояния; нестабильность повторного
 агрегирующего прогона зафиксирована отдельно от успешного целевого `just test-transfer`.
+
+## Выделение SAM-библиотеки, 2026-06-05
+
+После коммита корневого Rust workspace начато выделение SAM-слоя из `testbed`.
+Решение: создать отдельный workspace crate `sam3`, потому что ручная SAM3-реализация
+полезна отдельно от orchestration-кода с network namespaces.
+
+Перенесено из `testbed/src/sam/` в `sam3/src/`:
+- `messages.rs`, `payload.rs`, `wire.rs`;
+- `sender.rs`, `receiver.rs`;
+- низкоуровневый SAM3-клиент переименован из `sam3.rs` в `session.rs`, чтобы публичный API
+  был `sam3::session::SamSession`, а не `sam3::sam3`.
+
+`sam-sender` и `sam-receiver` теперь зависят от `sam3`, а не от всего `testbed`.
+`testbed` использует `sam3::{ReadyMsg, ResultMsg}` в transfer-тесте. Ошибка в процессе:
+после удаления `serde` из runtime-зависимостей `testbed` сборка тестов упала, потому что
+`testbed/tests/transfer.rs` напрямую использует `serde::Serialize` в helper-функции `as_json`.
+Решение: вернуть `serde` только как `[dev-dependencies]` для `testbed`.
+
+Проверки:
+- `cargo build --release` — PASS;
+- `cargo test -p testbed --no-run` — PASS.
+- `cargo test --workspace --no-run` — PASS;
+- `just test-transfer` — PASS (`setup≈9090ms`, `transfer≈2ms`,
+  `goodput≈4194 Mbps`, `first_byte≈9418ms`).

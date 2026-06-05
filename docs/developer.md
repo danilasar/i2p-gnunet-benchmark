@@ -12,12 +12,16 @@ testbed/src/node/
     gnunet.rs      GnunetPeer
     i2pd.rs        I2pdNode, reseed ZIP, RouterInfo hash
 
-testbed/src/sam/
-    sam3.rs        ручной SAM3 поверх TCP
+sam3/src/
+    session.rs     ручной SAM3 поверх TCP
     wire.rs        size + payload + sha256
     payload.rs     детерминированный payload
     sender.rs      sender workflow
     receiver.rs    receiver workflow
+
+sam-sender/src/main.rs
+sam-receiver/src/main.rs
+    тонкие CLI-обёртки над sam3
 
 testbed/tests/
     smoke.rs       test_gnunet_smoke, test_i2pd_smoke
@@ -62,7 +66,7 @@ tp.nodes[i].veth;  // veth внутри namespace
 
 `yosemite` был проверен, но не используется: sync API не позволяет точно передать
 весь набор tunnel options, нужный для совместимости с предыдущим поведением. Поэтому
-`testbed/src/sam/sam3.rs` реализует SAM3 вручную:
+`sam3/src/session.rs` реализует SAM3 вручную:
 
 - `HELLO VERSION MIN=3.0 MAX=3.3`
 - `DEST GENERATE SIGNATURE_TYPE=7`

@@ -56,20 +56,83 @@ func run(role, samAddr, id, dest, msg string, timeout time.Duration) error {
 		return fmt.Errorf("NewKeys: %w", err)
 	}
 
-	// Use empty options for simplicity
-	session, err := sam.NewStreamSession(id, keys, []string{})
-	if err != nil {
-		return fmt.Errorf("NewStreamSession: %w", err)
-	}
-	defer session.Close()
-
 	if role == "server" {
+		session, err := sam.NewStreamSession(id, keys, []string{})
+		if err != nil {
+			return fmt.Errorf("NewStreamSession: %w", err)
+		}
+		defer session.Close()
 		return runServer(session, keys)
 	} else if role == "client" {
+		session, err := sam.NewStreamSession(id, keys, []string{})
+		if err != nil {
+			return fmt.Errorf("NewStreamSession: %w", err)
+		}
+		defer session.Close()
 		return runClient(session, dest, msg)
+	} else if role == "datagram-server" {
+		dg, err := sam.NewDatagramSession(id, keys, []string{}, 0)
+		if err != nil {
+			return fmt.Errorf("NewDatagramSession: %w", err)
+		}
+		defer dg.Close()
+		return runDatagramServer(dg, keys)
+	} else if role == "datagram-client" {
+		dg, err := sam.NewDatagramSession(id, keys, []string{}, 0)
+		if err != nil {
+			return fmt.Errorf("NewDatagramSession: %w", err)
+		}
+		defer dg.Close()
+		return runDatagramClient(dg, dest, msg, timeout)
 	} else {
 		return fmt.Errorf("invalid role: %s", role)
 	}
+}
+
+func runDatagramServer(dg *sam3.DatagramSession, keys i2pkeys.I2PKeys) error {
+	outputReady(keys.Addr().Base64())
+
+	buf := make([]byte, 32*1024)
+	n, sender, err := dg.ReadFrom(buf)
+	if err != nil {
+		return fmt.Errorf("ReadFrom: %w", err)
+	}
+
+	_, err = dg.WriteTo(buf[:n], sender)
+	if err != nil {
+		return fmt.Errorf("WriteTo: %w", err)
+	}
+
+	outputResult(true, "")
+	return nil
+}
+
+func runDatagramClient(dg *sam3.DatagramSession, dest, msg string, timeout time.Duration) error {
+	i2pDest := i2pkeys.I2PAddr(dest)
+	_, err := dg.WriteTo([]byte(msg), i2pDest)
+	if err != nil {
+		return fmt.Errorf("WriteTo: %w", err)
+	}
+
+	dg.SetDeadline(time.Now().Add(timeout))
+	buf := make([]byte, len(msg)+1024)
+	n, addr, err := dg.ReadFrom(buf)
+	if err != nil {
+		return fmt.Errorf("ReadFrom: %w", err)
+	}
+
+	sender := addr.(i2pkeys.I2PAddr)
+
+	if sender.Base64() != i2pDest.Base64() {
+		return fmt.Errorf("sender mismatch: expected %s, got %s", i2pDest.Base64(), sender.Base64())
+	}
+
+	if string(buf[:n]) != msg {
+		return fmt.Errorf("echo mismatch: expected %q, got %q", msg, string(buf[:n]))
+	}
+
+	outputResult(true, "")
+	return nil
 }
 
 func runServer(session *sam3.StreamSession, keys i2pkeys.I2PKeys) error {

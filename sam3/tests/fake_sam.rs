@@ -667,7 +667,8 @@ impl FakeSam {
 
     fn spawn_many(mut handlers: Vec<Box<dyn FnOnce(TcpStream) + Send>>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind fake SAM");
-        let addr = listener.local_addr().expect("fake SAM addr").to_string();
+        let local_addr = listener.local_addr().expect("fake SAM addr");
+        let addr = format!("127.0.0.1:{}", local_addr.port());
         let handle = thread::spawn(move || {
             for handler in handlers.drain(..) {
                 let (stream, _) = listener.accept().expect("accept fake SAM client");

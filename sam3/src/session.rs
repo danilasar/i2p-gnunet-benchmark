@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     fmt, fs,
     io::{self, Read, Write},
-    net::TcpStream,
+    net::{SocketAddr, TcpStream, UdpSocket},
     path::Path,
     time::Duration,
 };
@@ -128,7 +128,7 @@ impl SessionOptions {
             .outbound_backup_quantity(0)
     }
 
-    pub(crate) fn to_pairs(&self) -> Vec<(String, String)> {
+    pub fn to_pairs(&self) -> Vec<(String, String)> {
         let mut pairs = Vec::new();
         if let Some(v) = self.inbound_length {
             pairs.push(("inbound.length".to_string(), v.to_string()));
@@ -319,6 +319,48 @@ impl SamClient {
         })
     }
 
+    pub fn new_datagram_session(
+        &self,
+        id: impl Into<String>,
+        keys: &Keys,
+        options: &SessionOptions,
+    ) -> Result<DatagramSession, crate::SamError> {
+        let id = id.into();
+        let mut sam_udp_addr: SocketAddr = self.sam_addr.parse().map_err(|_| {
+            crate::SamError::UnexpectedResponse(format!("Invalid SAM address: {}", self.sam_addr))
+        })?;
+        sam_udp_addr.set_port(7655);
+        let socket = UdpSocket::bind(SocketAddr::new(sam_udp_addr.ip(), 0))?;
+        let local_port = socket.local_addr()?.port();
+
+        let mut stream = TcpStream::connect(&self.sam_addr)?;
+        hello(&mut stream)?;
+        create_datagram_on(&mut stream, &id, keys, options, local_port)?;
+
+        Ok(DatagramSession {
+            _control: stream,
+            socket,
+            sam_udp_addr,
+            id,
+            keys: keys.clone(),
+        })
+    }
+
+    pub fn new_transient_datagram_session(
+        &self,
+        id: impl Into<String>,
+        options: &SessionOptions,
+    ) -> Result<DatagramSession, crate::SamError> {
+        let mut stream = TcpStream::connect(&self.sam_addr)?;
+        hello(&mut stream)?;
+        let keys = generate_keys_on(&mut stream, DEFAULT_SIGNATURE_TYPE)?;
+        // Don't call new_datagram_session directly as it will try to HELLO again on a new connection
+        // and we want to reuse the keys from the transient session.
+        // Actually, the keys were generated on the first connection, but new_datagram_session
+        // creates a NEW connection for the session itself. This is correct as per STREAM.
+        self.new_datagram_session(id, &keys, options)
+    }
+
     pub fn new_keys(&self) -> Result<Keys, crate::SamError> {
         self.new_keys_with_signature_type(DEFAULT_SIGNATURE_TYPE)
     }
@@ -344,6 +386,88 @@ impl SamClient {
         let mut stream = TcpStream::connect(&self.sam_addr)?;
         hello(&mut stream)?;
         lookup_on(&mut stream, name)
+    }
+}
+
+#[derive(Debug)]
+pub struct DatagramSession {
+    _control: TcpStream,
+    socket: UdpSocket,
+    pub(crate) sam_udp_addr: SocketAddr,
+    id: String,
+    keys: Keys,
+}
+
+impl DatagramSession {
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub fn sam_addr(&self) -> SocketAddr {
+        self.sam_udp_addr
+    }
+
+    pub fn local_destination(&self) -> &Destination {
+        self.keys.destination()
+    }
+
+    pub fn keys(&self) -> &Keys {
+        &self.keys
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_sam_udp_port(&mut self, port: u16) {
+        self.sam_udp_addr.set_port(port);
+    }
+
+    pub fn local_addr(&self) -> io::Result<SocketAddr> {
+        self.socket.local_addr()
+    }
+
+    pub fn send_to(&self, data: &[u8], dest: &Destination) -> Result<usize, crate::SamError> {
+        let header = format!("3.1 {} {}\n", self.id, dest);
+        let mut packet = header.into_bytes();
+        packet.extend_from_slice(data);
+        Ok(self.socket.send_to(&packet, self.sam_udp_addr)?)
+    }
+
+    pub fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, Destination), crate::SamError> {
+        let mut tmp = vec![0u8; buf.len() + 1024]; // Extra space for sender address
+        loop {
+            let (n, addr) = self.socket.recv_from(&mut tmp).map_err(|e| crate::SamError::Io(e.to_string()))?;
+            if addr.ip() != self.sam_udp_addr.ip() {
+                continue;
+            }
+
+            let mut i = 0;
+            while i < n && tmp[i] != b'\n' {
+                i += 1;
+            }
+
+            if i >= n {
+                continue; // Invalid packet: no newline
+            }
+
+            let sender = String::from_utf8_lossy(&tmp[..i]).to_string();
+            let data_len = n - (i + 1);
+            if data_len > buf.len() {
+                return Err(crate::SamError::UnexpectedResponse(format!(
+                    "Buffer too small for datagram: {data_len} > {}",
+                    buf.len()
+                )));
+            }
+
+            buf[..data_len].copy_from_slice(&tmp[i + 1..n]);
+            return Ok((data_len, Destination::new(sender)));
+        }
+    }
+
+    pub fn set_read_timeout(&self, dur: Option<Duration>) -> io::Result<()> {
+        self.socket.set_read_timeout(dur)
+    }
+
+    pub fn set_write_timeout(&self, dur: Option<Duration>) -> io::Result<()> {
+        self.socket.set_write_timeout(dur)
     }
 }
 
@@ -572,6 +696,28 @@ fn create_stream_on(
     })
 }
 
+fn create_datagram_on(
+    stream: &mut TcpStream,
+    id: &str,
+    keys: &Keys,
+    options: &SessionOptions,
+    local_port: u16,
+) -> Result<(), crate::SamError> {
+    write!(
+        stream,
+        "SESSION CREATE STYLE=DATAGRAM ID={id} DESTINATION={} PORT={local_port} ",
+        keys.private_key()
+    )?;
+    for (key, value) in options.to_pairs() {
+        write!(stream, "{key}={value} ")?;
+    }
+    write!(stream, "SIGNATURE_TYPE={DEFAULT_SIGNATURE_TYPE}\n")?;
+    stream.flush()?;
+    let line = read_line(stream)?;
+    ensure_ok(&line)?;
+    Ok(())
+}
+
 fn parse_keyfile(contents: &str) -> Option<Keys> {
     let mut public = None;
     let mut private = None;
@@ -699,7 +845,8 @@ fn unescape_quoted(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{ensure_ok, parse_fields, Keys, SessionOptions};
+    use super::*;
+    use std::net::TcpListener;
 
     #[test]
     fn session_options_default_produces_empty_pairs() {
@@ -738,6 +885,247 @@ mod tests {
         assert_eq!(fields.get("RESULT").map(String::as_str), Some("OK"));
         assert_eq!(fields.get("VERSION").map(String::as_str), Some("3.3"));
         assert!(!fields.contains_key("HELLO"));
+    }
+
+    struct FakeSam {
+        addr: String,
+        handle: std::thread::JoinHandle<()>,
+    }
+
+    impl FakeSam {
+        fn spawn_many(mut handlers: Vec<Box<dyn FnOnce(TcpStream) + Send>>) -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("bind fake SAM");
+            let local_addr = listener.local_addr().expect("fake SAM addr");
+            let addr = format!("127.0.0.1:{}", local_addr.port());
+            let handle = std::thread::spawn(move || {
+                for handler in handlers.drain(..) {
+                    let (stream, _) = listener.accept().expect("accept fake SAM client");
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(2)))
+                        .expect("set read timeout");
+                    stream
+                        .set_write_timeout(Some(Duration::from_secs(2)))
+                        .expect("set write timeout");
+                    handler(stream);
+                }
+            });
+            Self { addr, handle }
+        }
+
+        fn join(self) {
+            self.handle.join().expect("fake SAM thread");
+        }
+    }
+
+    fn expect_line(stream: &mut TcpStream, expected: &str) {
+        let line = read_line(stream);
+        assert_eq!(line, expected);
+    }
+
+    fn read_line(stream: &mut TcpStream) -> String {
+        let mut buf = Vec::new();
+        let mut byte = [0u8; 1];
+        loop {
+            stream.read_exact(&mut byte).expect("read line byte");
+            if byte[0] == b'\n' {
+                break;
+            }
+            buf.push(byte[0]);
+        }
+        String::from_utf8(buf).expect("utf-8 line")
+    }
+
+    #[test]
+    fn datagram_session_create_sends_correct_sam_command() {
+        let server = FakeSam::spawn_many(vec![
+            Box::new(|mut stream| {
+                expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+                writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+                expect_line(&mut stream, "DEST GENERATE SIGNATURE_TYPE=7");
+                writeln!(stream, "DEST REPLY PUB=pubdest PRIV=privdest").unwrap();
+            }),
+            Box::new(|mut stream| {
+                expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+                writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+                let create = read_line(&mut stream);
+                assert!(create
+                    .starts_with("SESSION CREATE STYLE=DATAGRAM ID=dg_test DESTINATION=privdest "));
+                assert!(create.contains("PORT="));
+                writeln!(stream, "SESSION STATUS RESULT=OK").unwrap();
+            }),
+        ]);
+
+        let client = SamClient::connect(&server.addr);
+        let _ = client
+            .new_transient_datagram_session("dg_test", &SessionOptions::zero_hop())
+            .unwrap();
+        server.join();
+    }
+
+    #[test]
+    fn datagram_session_create_includes_options() {
+        let server = FakeSam::spawn_many(vec![
+            Box::new(|mut stream| {
+                expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+                writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+                expect_line(&mut stream, "DEST GENERATE SIGNATURE_TYPE=7");
+                writeln!(stream, "DEST REPLY PUB=pubdest PRIV=privdest").unwrap();
+            }),
+            Box::new(|mut stream| {
+                expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+                writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+                let create = read_line(&mut stream);
+                assert!(create.contains("inbound.length=3"));
+                writeln!(stream, "SESSION STATUS RESULT=OK").unwrap();
+            }),
+        ]);
+
+        let client = SamClient::connect(&server.addr);
+        let _ = client
+            .new_transient_datagram_session("dg_test", &SessionOptions::default().inbound_length(3))
+            .unwrap();
+        server.join();
+    }
+
+    #[test]
+    fn datagram_send_to_writes_correct_packet_format() {
+        let sam_udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let sam_udp_addr = sam_udp.local_addr().unwrap();
+        sam_udp.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+
+        let server = FakeSam::spawn_many(vec![
+            Box::new(|mut stream| {
+                expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+                writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+                expect_line(&mut stream, "DEST GENERATE SIGNATURE_TYPE=7");
+                writeln!(stream, "DEST REPLY PUB=pubdest PRIV=privdest").unwrap();
+            }),
+            Box::new(|mut stream| {
+                expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+                writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+                let _ = read_line(&mut stream);
+                writeln!(stream, "SESSION STATUS RESULT=OK").unwrap();
+            }),
+        ]);
+
+        let client_addr = format!(
+            "{}:{}",
+            sam_udp_addr.ip(),
+            server.addr.split(':').last().unwrap()
+        );
+        let client = SamClient::connect(&client_addr);
+        let session = client
+            .new_transient_datagram_session("dg_id", &SessionOptions::zero_hop())
+            .unwrap();
+
+        let mut session = session;
+        session.set_sam_udp_port(sam_udp_addr.port());
+
+        let dest = Destination::new("target_dest");
+        session.send_to(b"hello world", &dest).unwrap();
+
+        let mut buf = [0u8; 1024];
+        let (n, _) = sam_udp.recv_from(&mut buf).unwrap();
+        let packet = String::from_utf8_lossy(&buf[..n]);
+        assert_eq!(packet, "3.1 dg_id target_dest\nhello world");
+        server.join();
+    }
+
+    #[test]
+    fn datagram_recv_from_parses_sender_and_data() {
+        let sam_udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let sam_udp_addr = sam_udp.local_addr().unwrap();
+
+        let server = FakeSam::spawn_many(vec![
+            Box::new(|mut stream| {
+                expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+                writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+                expect_line(&mut stream, "DEST GENERATE SIGNATURE_TYPE=7");
+                writeln!(stream, "DEST REPLY PUB=pubdest PRIV=privdest").unwrap();
+            }),
+            Box::new(|mut stream| {
+                expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+                writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+                let _ = read_line(&mut stream);
+                writeln!(stream, "SESSION STATUS RESULT=OK").unwrap();
+            }),
+        ]);
+
+        let client_addr = format!(
+            "{}:{}",
+            sam_udp_addr.ip(),
+            server.addr.split(':').last().unwrap()
+        );
+        let client = SamClient::connect(&client_addr);
+        let session = client
+            .new_transient_datagram_session("dg_id", &SessionOptions::zero_hop())
+            .unwrap();
+
+        let mut session = session;
+        session.set_sam_udp_port(sam_udp_addr.port());
+
+        let local_addr = session.local_addr().unwrap();
+        sam_udp
+            .send_to(b"sender_dest\nsecret data", local_addr)
+            .unwrap();
+
+        let mut buf = [0u8; 1024];
+        let (n, sender) = session.recv_from(&mut buf).unwrap();
+        assert_eq!(sender.as_str(), "sender_dest");
+        assert_eq!(&buf[..n], b"secret data");
+        server.join();
+    }
+
+    #[test]
+    fn datagram_recv_from_ignores_packets_not_from_sam_ip() {
+        let sam_udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let sam_udp_addr = sam_udp.local_addr().unwrap();
+
+        let server = FakeSam::spawn_many(vec![
+            Box::new(|mut stream| {
+                expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+                writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+                expect_line(&mut stream, "DEST GENERATE SIGNATURE_TYPE=7");
+                writeln!(stream, "DEST REPLY PUB=pubdest PRIV=privdest").unwrap();
+            }),
+            Box::new(|mut stream| {
+                expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+                writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+                let _ = read_line(&mut stream);
+                writeln!(stream, "SESSION STATUS RESULT=OK").unwrap();
+            }),
+        ]);
+
+        let client_addr = format!(
+            "{}:{}",
+            sam_udp_addr.ip(),
+            server.addr.split(':').last().unwrap()
+        );
+        let client = SamClient::connect(&client_addr);
+        let session = client
+            .new_transient_datagram_session("dg_id", &SessionOptions::zero_hop())
+            .unwrap();
+
+        let mut session = session;
+        session.set_sam_udp_port(sam_udp_addr.port());
+
+        session.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+        let local_addr = session.local_addr().unwrap();
+
+        let wrong_udp = UdpSocket::bind("127.0.0.2:0").unwrap();
+        wrong_udp
+            .send_to(b"hacker\nfake data", local_addr)
+            .unwrap();
+
+        sam_udp
+            .send_to(b"real_sender\ncorrect data", local_addr)
+            .unwrap();
+
+        let mut buf = [0u8; 1024];
+        let (n, sender) = session.recv_from(&mut buf).unwrap();
+        assert_eq!(sender.as_str(), "real_sender");
+        assert_eq!(&buf[..n], b"correct data");
+        server.join();
     }
 
     #[test]

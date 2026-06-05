@@ -220,6 +220,131 @@ fn test_go_sender_rust_receiver() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
+fn test_rust_datagram_sender_go_receiver() -> Result<(), Box<dyn Error>> {
+    let (tp, _nodes, _tmp) = setup_two_sam_nodes()?;
+    let msg = "hello datagram from rust";
+
+    // 1. Start Go datagram-server in node1
+    let mut go_proc = Command::new("ip")
+        .args([
+            "netns",
+            "exec",
+            &tp.nodes[1].ns,
+            "go-sam3-peer",
+            "--role",
+            "datagram-server",
+            "--sam",
+            "127.0.0.1:7656",
+            "--id",
+            "go-dg-server",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()?;
+
+    let mut go_stdout = BufReader::new(go_proc.stdout.take().unwrap());
+    let mut ready_line = String::new();
+    go_stdout.read_line(&mut ready_line)?;
+    let ready: GoReadyMsg = serde_json::from_str(&ready_line)?;
+    let go_dest = ready.dest;
+
+    // 2. Start Rust datagram-sender in node2
+    let rust_out = Command::new("ip")
+        .args([
+            "netns",
+            "exec",
+            &tp.nodes[2].ns,
+            "sam-compat",
+            "--role",
+            "datagram-sender",
+            "--sam",
+            "127.0.0.1:7656",
+            "--id",
+            "rust-dg-client",
+            "--dest",
+            &go_dest,
+            "--msg",
+            msg,
+        ])
+        .output()?;
+
+    let rust_result: GoResultMsg = serde_json::from_slice(&rust_out.stdout)?;
+    assert!(rust_result.success, "Rust datagram sender failed: {}", rust_result.error);
+
+    // 3. Check Go result
+    let mut result_line = String::new();
+    go_stdout.read_line(&mut result_line)?;
+    let result: GoResultMsg = serde_json::from_str(&result_line)?;
+    assert!(result.success, "Go datagram server failed: {}", result.error);
+
+    go_proc.wait()?;
+    Ok(())
+}
+
+#[test]
+fn test_go_datagram_sender_rust_receiver() -> Result<(), Box<dyn Error>> {
+    let (tp, _nodes, _tmp) = setup_two_sam_nodes()?;
+    let msg = "hello datagram from go";
+
+    // 1. Start Rust datagram-receiver in node1
+    let mut rust_proc = Command::new("ip")
+        .args([
+            "netns",
+            "exec",
+            &tp.nodes[1].ns,
+            "sam-compat",
+            "--role",
+            "datagram-receiver",
+            "--sam",
+            "127.0.0.1:7656",
+            "--id",
+            "rust-dg-receiver",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()?;
+
+    let mut rust_stdout = BufReader::new(rust_proc.stdout.take().unwrap());
+    let mut ready_line = String::new();
+    rust_stdout.read_line(&mut ready_line)?;
+    let ready: GoReadyMsg = serde_json::from_str(&ready_line)?;
+    let rust_dest = ready.dest;
+
+    // 2. Start Go datagram-client in node2
+    let go_out = Command::new("ip")
+        .args([
+            "netns",
+            "exec",
+            &tp.nodes[2].ns,
+            "go-sam3-peer",
+            "--role",
+            "datagram-client",
+            "--sam",
+            "127.0.0.1:7656",
+            "--id",
+            "go-dg-client",
+            "--dest",
+            &rust_dest,
+            "--msg",
+            msg,
+        ])
+        .output()?;
+
+    let lines: Vec<_> = go_out.stdout.split(|&b| b == b'\n').filter(|l| !l.is_empty()).collect();
+    let result: GoResultMsg = serde_json::from_slice(lines.last().ok_or("no output from go-sam3-peer")?)?;
+    assert!(result.success, "Go datagram client failed: {}", result.error);
+
+    // 3. Check Rust result
+    let mut result_line = String::new();
+    rust_stdout.read_line(&mut result_line)?;
+    let result: GoResultMsg = serde_json::from_str(&result_line)?;
+    assert!(result.success, "Rust datagram receiver failed: {}", result.error);
+
+    rust_proc.wait()?;
+    Ok(())
+}
+
+#[test]
 fn test_lookup_against_go_destination() -> Result<(), Box<dyn Error>> {
     let (tp, _nodes, _tmp) = setup_two_sam_nodes()?;
 

@@ -777,6 +777,87 @@ result только после EOF» Rust-тест, читающий result до
 - `just build` — Docker-образ собирается корректно.
 - `cargo build --workspace` — PASS, 0 предупреждений.
 
+## DatagramSession, 2026-06-05
+
+Реализован тип `DatagramSession` в библиотеке `sam3` — unreliable-транспорт поверх I2P
+по протоколу SAM v3.3. Добавлены тесты совместимости с эталонной Go-реализацией.
+Проведено ревью и устранены все выявленные замечания.
+
+### Что сделано
+
+**Структура `DatagramSession` в `sam3/src/session.rs`:**
+- Два сокета: `_control: TcpStream` (TCP-управление сессией) и `socket: UdpSocket`
+  (UDP для данных, порт 7655 на стороне SAM).
+- `send_to(data, dest)` — формирует пакет `3.1 {id} {dest}\n{data}` и отправляет
+  его на `sam_udp_addr` (SAM-мост, порт 7655).
+- `recv_from(buf)` — читает пакеты в цикле; пакеты не от `sam_udp_addr.ip()`
+  отбрасываются (защита от спуфинга); первая строка пакета — адрес отправителя,
+  остаток — полезная нагрузка.
+- `local_addr()` — адрес локального UDP-сокета (куда SAM-мост доставляет данные).
+- `set_read_timeout` / `set_write_timeout` — проксируются на `UdpSocket`.
+
+**Фабричные методы в `SamClient`:**
+- `new_datagram_session(id, keys, options)` — создаёт сессию с заданными ключами.
+- `new_transient_datagram_session(id, options)` — генерирует ключи и создаёт сессию
+  (два TCP-подключения к SAM: одно для `DEST GENERATE`, другое для `SESSION CREATE`).
+- UDP-адрес SAM вычисляется через `SocketAddr::parse()` на SAM-адрес плюс замена
+  порта на 7655; локальный UDP-сокет биндится на тот же IP (`SocketAddr::new(ip, 0)`).
+  Это корректно работает как с IPv4 (`127.0.0.1`), так и с IPv6 (`[::1]`).
+
+**Тесты в `sam3/src/session.rs` (блок `#[cfg(test)] mod tests`):**
+- `datagram_session_create_sends_correct_sam_command` — wire-format команды
+  `SESSION CREATE STYLE=DATAGRAM … PORT=…`.
+- `datagram_session_create_includes_options` — опции туннеля передаются в команду.
+- `datagram_send_to_writes_correct_packet_format` — формат UDP-пакета отправки.
+- `datagram_recv_from_parses_sender_and_data` — корректное разделение sender/data.
+- `datagram_recv_from_ignores_packets_not_from_sam_ip` — IP-фильтрация: пакет от
+  `127.0.0.2` отбрасывается, от `127.0.0.1` — принимается.
+
+**Тесты совместимости:**
+- Go-роли `datagram-server` и `datagram-client` добавлены в `go-compat/main.go`.
+- Rust-роли `datagram-sender` и `datagram-receiver` добавлены в `sam-compat/src/main.rs`.
+- Два новых теста в `testbed/tests/sam3_compat.rs`:
+  `test_rust_datagram_sender_go_receiver`, `test_go_datagram_sender_rust_receiver`.
+
+### Нетривиальные решения
+
+**Бинд UDP-сокета на `0.0.0.0:0` вместо `sam_host:0`** — исходно сокет биндился на
+`0.0.0.0:0`. Метод `local_addr()` возвращал `0.0.0.0:PORT`. В тестах отправка
+`sam_udp.send_to(data, 0.0.0.0:PORT)` не доставляла пакет на loopback-сокет (ядро
+маршрутизировало пакет через дефолтный шлюз). Тест `recv_from_parses_sender_and_data`
+зависал на 60+ секунд; тест `recv_from_ignores_packets_not_from_sam_ip` падал с EAGAIN
+после таймаута. Исправлено биндом на `SocketAddr::new(sam_udp_addr.ip(), 0)` — сокет
+биндится на тот же IP, что и SAM-мост, и `local_addr()` возвращает корректный адрес.
+
+**Два TCP-подключения для транзитной сессии** — `new_transient_datagram_session` делает
+два TCP-подключения к SAM: первое для `DEST GENERATE` (генерация ключей), второе для
+`SESSION CREATE STYLE=DATAGRAM`. Тесты с `FakeSam::spawn` (одно соединение) зависали
+при ожидании второго клиента. Исправлено через `FakeSam::spawn_many` с отдельным
+обработчиком для каждого подключения.
+
+**Сокрытие тестового метода `set_sam_udp_port`** — для теста `send_to` нужна возможность
+перенаправить исходящий UDP на тестовый сокет. Метод `set_sam_udp_port(&mut self, port)`
+нужен только для тестов. `pub(crate)` недоступен из папки `tests/` (интеграционные тесты —
+внешний крейт), `#[cfg(test)] pub fn` не работает (библиотека при сборке тестов
+компилируется без флага `test`). Решение: 5 датаграммных тестов перенесены из
+`tests/fake_sam.rs` в `src/session.rs` в блок `#[cfg(test)] mod tests`, где метод помечен
+`#[cfg(test)] pub(crate)` — полностью скрыт из публичного API.
+
+**Duplicate ID в `go-compat`** — `sam.NewStreamSession` вызывался до ветвления по роли.
+Для датаграммных ролей это создавало stream-сессию и datagram-сессию с одним ID. SAM-мост
+вернул бы `DUPLICATE_ID`. Исправлено перемещением `NewStreamSession` / `NewDatagramSession`
+внутрь соответствующих веток `if role ==`.
+
+**Приведение типа отправителя в Go** — `dg.ReadFrom()` возвращает `net.Addr`. Метод
+`Base64()` доступен только у `i2pkeys.I2PAddr`. Потребовалось явное type assertion:
+`sender := addr.(i2pkeys.I2PAddr)`.
+
+### Проверки
+
+- `cargo test -p sam3` — 34 теста, PASS, 0 предупреждений (из них 5 новых датаграммных).
+- `cargo check --workspace` — PASS.
+- `go build ./go-compat` — PASS.
+
 ## SessionOptions builder, 2026-06-05
 
 Реализован типизированный builder для параметров туннельной сессии SAM.

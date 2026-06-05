@@ -12,13 +12,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build Docker image
-        run: docker build -t coursework-overlay:latest .
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-      - name: Run smoke tests
+      - name: Build Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          tags: coursework-overlay:latest
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run integration tests
         run: |
           docker run --rm --privileged \
             -v ${{ github.workspace }}:/workspace \
             -w /workspace \
             coursework-overlay:latest \
-            go test ./testbed/... -v -run Smoke -timeout 5m
+            bash -lc 'cargo build --release --manifest-path /workspace/Cargo.toml && cp /workspace/target/release/sam-sender /usr/local/bin/sam-sender && cp /workspace/target/release/sam-receiver /usr/local/bin/sam-receiver && cargo test --manifest-path /workspace/Cargo.toml -p testbed -- --test-threads=1 --nocapture'

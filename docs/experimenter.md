@@ -22,16 +22,16 @@ CPU/RAM.
 
 **Smoke-тесты** проверяют, что инфраструктура работает:
 
-- `TestGnunetSmoke` — два пира в изолированных netns обмениваются HELLO
+- `test_gnunet_smoke` — два пира в изолированных netns обмениваются HELLO
   и устанавливают CORE-соединение (~15 с).
-- `TestI2pdSmoke` — четыре ноды bootstrapped через локальный ZIP reseed,
+- `test_i2pd_smoke` — четыре ноды bootstrapped через локальный ZIP reseed,
   выполняют DHT exploration, SAM bridge отвечает (~90 с).
 
 Это не измерения производительности — это проверка работоспособности стенда.
 
 ## Что не реализовано (запланировано)
 
-- Sender/receiver для SAM STREAM (Arm A, B) — Rust, `rs/sam-sender`, `rs/sam-receiver`
+- Sender/receiver для SAM STREAM (Arm A, B) — Rust, `sam-sender`, `sam-receiver`
 - Sender/receiver для CADET (Arm C)
 - Наложение underlay-профилей через `tc netem`
 - Сбор метрик (goodput, RTT, CPU/RSS) и запись в JSONL
@@ -42,9 +42,10 @@ CPU/RAM.
 
 ```bash
 just build        # собрать образ (один раз)
-just test         # оба smoke-теста
+just test         # все Rust-интеграционные тесты
 just test-gnunet  # только GNUnet
 just test-i2p     # только i2pd
+just test-transfer # SAM STREAM transfer
 ```
 
 ## Топология стенда
@@ -66,7 +67,7 @@ i2pd не умеет работать в закрытой сети без reseed
 упаковывается в ZIP, остальные ноды загружают его через `[reseed] zipfile`.
 
 Время до первого DHT exploration — около 55 секунд.
-Таймаут в `TestI2pdSmoke` — 90 секунд.
+Таймаут в `test_i2pd_smoke` — 90 секунд.
 
 ## GNUnet: особенности bootstrap
 

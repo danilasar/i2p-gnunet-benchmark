@@ -8,7 +8,6 @@ RUN apt-get update && apt-get install -y \
     procps \
     python3 \
     python3-module-networkx \
-    golang \
     curl \
     gcc \
     iputils \
@@ -22,6 +21,6 @@ WORKDIR /workspace
 
 # Build binaries
 COPY . /workspace
-RUN cargo build --release --manifest-path /workspace/rs/Cargo.toml
-RUN cp /workspace/rs/target/release/sam-sender /usr/local/bin/sam-sender
-RUN cp /workspace/rs/target/release/sam-receiver /usr/local/bin/sam-receiver
+RUN cargo build --release --manifest-path /workspace/Cargo.toml
+RUN cp /workspace/target/release/sam-sender /usr/local/bin/sam-sender
+RUN cp /workspace/target/release/sam-receiver /usr/local/bin/sam-receiver

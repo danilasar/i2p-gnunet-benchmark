@@ -346,3 +346,42 @@ toolchain через rustup (`curl https://sh.rustup.rs | sh -s -- -y`), зат�
 Также после Docker-сборок часть файлов в игнорируемом `rs/target` стала root-owned.
 Чтобы не мешать последующим локальным `cargo build`, владелец `rs/target` возвращён
 на пользователя `1000:1000` через контейнерный `chown`.
+
+## Удаление Go-реализации и перенос Rust в корень, 2026-06-05
+
+По решению после успешного Rust-порта Go-часть удалена:
+- `cmd/`, `internal/`, старый Go `testbed/`, `go.mod`, `go.sum`.
+
+Rust workspace перенесён из `rs/` в корень проекта:
+- `Cargo.toml`, `Cargo.lock` теперь лежат в корне;
+- `sam-sender/`, `sam-receiver/`, `testbed/` стали корневыми workspace members;
+- `target/` добавлен в `.gitignore` и `.dockerignore` вместо `rs/target`.
+
+`Justfile` переведён на Rust:
+- `just test-gnunet` запускает `test_gnunet_smoke` в Docker;
+- `just test-i2p` запускает `test_i2pd_smoke` в Docker;
+- `just test-transfer` собирает Rust sender/receiver, копирует их в `/usr/local/bin`
+  и запускает `test_sam_transfer`;
+- `just test` запускает все Rust-интеграционные тесты последовательно
+  (`--test-threads=1`) и также пересобирает sender/receiver перед запуском;
+- `just test-rust` оставлен как алиас на `just test`.
+
+`Dockerfile` больше не устанавливает `golang`; Rust toolchain по-прежнему ставится через rustup.
+README, AGENTS, developer/experimenter docs и CI обновлены под корневой Rust workspace.
+
+Проверки после переноса в корень:
+- `cargo fmt --all` — PASS;
+- `cargo build --release` — PASS;
+- `cargo test -p testbed --no-run` — PASS;
+- `just build` — PASS;
+- `just test-gnunet` — PASS (`test_gnunet_smoke`, ~12 сек);
+- `just test-i2p` — PASS (`test_i2pd_smoke`, ~56 сек);
+- `just test-transfer` — PASS (`test_sam_transfer`,
+  `setup≈12096ms`, `transfer≈2ms`, `goodput≈4194 Mbps`, `first_byte≈12406ms`).
+
+Дополнительно был запущен полный `just test` как проверка агрегирующей команды. Это был лишний
+повтор уже пройденных тестов; в нём `test_gnunet_smoke` и `test_i2pd_smoke` прошли, а повторный
+`test_sam_transfer` упал на ожидании result от receiver после ошибки поиска LeaseSet в i2pd
+(`receiver did not send result message`). Решение на этот момент: не начинать выделение
+SAM-интерфейсов в отдельную библиотеку до коммита текущего состояния; нестабильность повторного
+агрегирующего прогона зафиксирована отдельно от успешного целевого `just test-transfer`.

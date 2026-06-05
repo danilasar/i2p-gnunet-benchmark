@@ -1,5 +1,4 @@
-rs/target/
-rs/**/target/
+target/
 **/node_modules/
 .pytest_cache/
 __pycache__/

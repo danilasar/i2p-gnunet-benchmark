@@ -858,6 +858,78 @@ result только после EOF» Rust-тест, читающий result до
 - `cargo check --workspace` — PASS.
 - `go build ./go-compat` — PASS.
 
+## RawSession, 2026-06-05
+
+Реализован тип `RawSession` в библиотеке `sam3` — минималистичный UDP-транспорт
+поверх I2P по протоколу SAM v3.3 (`STYLE=RAW`). Добавлены тесты совместимости
+с эталонной Go-реализацией.
+
+### Отличия от DatagramSession
+
+| | RAW | DATAGRAM |
+|---|---|---|
+| Версия в заголовке отправки | `3.0` | `3.1` |
+| Заголовок при приёме | нет — голые байты | `sender_b64\n` |
+| Аутентификация отправителя | нет | да (подпись) |
+| Метод чтения | `read(buf) → n` | `recv_from(buf) → (n, dest)` |
+
+### Что сделано
+
+**Структура `RawSession` в `sam3/src/session.rs`:**
+- Идентична `DatagramSession` по полям: `_control`, `socket`, `sam_udp_addr`, `id`, `keys`.
+- `send_to(data, dest)` — заголовок `3.0 {id} {dest}\n`, затем данные.
+- `read(buf)` — читает пакет напрямую в `buf` (без промежуточного буфера: нечего
+  вырезать), IP-фильтрация по `sam_udp_addr.ip()`.
+- `set_read_timeout` / `set_write_timeout`, `local_addr()`, `local_destination()`.
+- `#[cfg(test)] pub(crate) fn set_sam_udp_port` — тестовый escape hatch (скрыт из API).
+
+**Хелпер `create_raw_on`** — формирует `SESSION CREATE STYLE=RAW ID=… DESTINATION=…
+PORT=… {options} SIGNATURE_TYPE=…`, симметрично `create_datagram_on`.
+
+**Фабричные методы в `SamClient`:**
+- `new_raw_session(id, keys, options)`
+- `new_transient_raw_session(id, options)` — два TCP-подключения к SAM:
+  `DEST GENERATE` + `SESSION CREATE`.
+
+**Unit-тесты (5 штук, блок `#[cfg(test)] mod tests` в `session.rs`):**
+- Корректность команды `SESSION CREATE STYLE=RAW … PORT=…`.
+- Передача опций туннеля.
+- Формат пакета отправки (`3.0 {id} {dest}\nhello world`).
+- `read()` возвращает голые байты без заголовка.
+- Фильтрация: пакет от `127.0.0.2` отбрасывается, от `127.0.0.1` принимается.
+
+**Тесты совместимости:**
+- Go-роли `raw-server` и `raw-client` в `go-compat/main.go`.
+  Сервер принимает `--msg`, проверяет содержимое пакета (echo невозможен — адрес
+  отправителя в RAW-режиме не возвращается).
+- Rust-роли `raw-sender` и `raw-receiver` в `sam-compat/src/main.rs`.
+  Receiver требует `--msg` для детерминированной проверки.
+- Два новых теста в `testbed/tests/sam3_compat.rs`:
+  `test_rust_raw_sender_go_receiver`, `test_go_raw_sender_rust_receiver`.
+
+### Нетривиальные решения
+
+**Одностороннее тестирование вместо echo** — в отличие от Stream и Datagram,
+RAW-получатель не знает адрес отправителя и не может ответить. Тесты совместимости
+переработаны: получатель проверяет содержимое пакета против `--msg` и выводит
+`result`, а отправитель выводит `result` сразу после `send_to`. Тест ждёт оба
+результата независимо.
+
+**Прямой буфер в `read()`** — `DatagramSession::recv_from` использует промежуточный
+`tmp`-буфер чтобы вырезать `sender_b64\n` перед копированием в пользовательский `buf`.
+В `RawSession::read` заголовка нет, `recv_from` пишет прямо в `buf` — лишнее
+копирование исключено.
+
+**Точное имя API в go-i2p/sam3** — в документации встречается `NewRawDatagramSession`,
+но актуальное имя метода `NewRawSession`; установлено через `go doc`.
+
+### Проверки
+
+- `cargo test -p sam3 raw_` — 5 тестов, PASS.
+- `cargo check --workspace` — PASS, 0 предупреждений.
+- `go build ./go-compat` — PASS.
+- `cargo build -p sam-compat` — PASS.
+
 ## SessionOptions builder, 2026-06-05
 
 Реализован типизированный builder для параметров туннельной сессии SAM.

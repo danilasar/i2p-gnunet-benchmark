@@ -48,9 +48,49 @@ fn main() -> Result<(), Box<dyn Error>> {
         "receiver" => run_receiver(args),
         "datagram-sender" => run_datagram_sender(args),
         "datagram-receiver" => run_datagram_receiver(args),
+        "raw-sender" => run_raw_sender(args),
+        "raw-receiver" => run_raw_receiver(args),
         "lookup" => run_lookup(args),
         _ => Err(format!("Unknown role: {}", args.role).into()),
     }
+}
+
+fn run_raw_sender(args: Args) -> Result<(), Box<dyn Error>> {
+    let dest = args.dest.ok_or("--dest is required for raw-sender")?;
+    let msg = args.msg.ok_or("--msg is required for raw-sender")?;
+
+    let client = SamClient::connect(&args.sam);
+    let session = client.new_transient_raw_session(&args.id, &SessionOptions::zero_hop())?;
+
+    session.send_to(msg.as_bytes(), &dest.into())?;
+
+    output_result(true, "");
+    Ok(())
+}
+
+fn run_raw_receiver(args: Args) -> Result<(), Box<dyn Error>> {
+    let msg = args.msg.ok_or("--msg is required for raw-receiver (to verify)")?;
+
+    let client = SamClient::connect(&args.sam);
+    let session = client.new_transient_raw_session(&args.id, &SessionOptions::zero_hop())?;
+    let dest = session.local_destination().to_string();
+
+    output_ready(&dest);
+
+    session.set_read_timeout(Some(Duration::from_secs(120)))?;
+    let mut buf = vec![0u8; 32 * 1024];
+    let n = session.read(&mut buf)?;
+
+    if String::from_utf8_lossy(&buf[..n]) != msg {
+        return Err(format!(
+            "Message mismatch: expected {msg}, got {}",
+            String::from_utf8_lossy(&buf[..n])
+        )
+        .into());
+    }
+
+    output_result(true, "");
+    Ok(())
 }
 
 fn run_datagram_sender(args: Args) -> Result<(), Box<dyn Error>> {

@@ -84,9 +84,51 @@ func run(role, samAddr, id, dest, msg string, timeout time.Duration) error {
 		}
 		defer dg.Close()
 		return runDatagramClient(dg, dest, msg, timeout)
+	} else if role == "raw-server" {
+		raw, err := sam.NewRawSession(id, keys, []string{}, 0)
+		if err != nil {
+			return fmt.Errorf("NewRawSession: %w", err)
+		}
+		defer raw.Close()
+		return runRawServer(raw, keys, msg)
+	} else if role == "raw-client" {
+		raw, err := sam.NewRawSession(id, keys, []string{}, 0)
+		if err != nil {
+			return fmt.Errorf("NewRawSession: %w", err)
+		}
+		defer raw.Close()
+		return runRawClient(raw, dest, msg)
 	} else {
 		return fmt.Errorf("invalid role: %s", role)
 	}
+}
+
+func runRawServer(raw *sam3.RawSession, keys i2pkeys.I2PKeys, expectedMsg string) error {
+	outputReady(keys.Addr().Base64())
+
+	buf := make([]byte, 32*1024)
+	n, err := raw.Read(buf)
+	if err != nil {
+		return fmt.Errorf("Read: %w", err)
+	}
+
+	if expectedMsg != "" && string(buf[:n]) != expectedMsg {
+		return fmt.Errorf("message mismatch: expected %q, got %q", expectedMsg, string(buf[:n]))
+	}
+
+	outputResult(true, "")
+	return nil
+}
+
+func runRawClient(raw *sam3.RawSession, dest, msg string) error {
+	i2pDest := i2pkeys.I2PAddr(dest)
+	_, err := raw.WriteTo([]byte(msg), i2pDest)
+	if err != nil {
+		return fmt.Errorf("WriteTo: %w", err)
+	}
+
+	outputResult(true, "")
+	return nil
 }
 
 func runDatagramServer(dg *sam3.DatagramSession, keys i2pkeys.I2PKeys) error {

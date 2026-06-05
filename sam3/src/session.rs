@@ -361,6 +361,44 @@ impl SamClient {
         self.new_datagram_session(id, &keys, options)
     }
 
+    pub fn new_raw_session(
+        &self,
+        id: impl Into<String>,
+        keys: &Keys,
+        options: &SessionOptions,
+    ) -> Result<RawSession, crate::SamError> {
+        let id = id.into();
+        let mut sam_udp_addr: SocketAddr = self.sam_addr.parse().map_err(|_| {
+            crate::SamError::UnexpectedResponse(format!("Invalid SAM address: {}", self.sam_addr))
+        })?;
+        sam_udp_addr.set_port(7655);
+        let socket = UdpSocket::bind(SocketAddr::new(sam_udp_addr.ip(), 0))?;
+        let local_port = socket.local_addr()?.port();
+
+        let mut stream = TcpStream::connect(&self.sam_addr)?;
+        hello(&mut stream)?;
+        create_raw_on(&mut stream, &id, keys, options, local_port)?;
+
+        Ok(RawSession {
+            _control: stream,
+            socket,
+            sam_udp_addr,
+            id,
+            keys: keys.clone(),
+        })
+    }
+
+    pub fn new_transient_raw_session(
+        &self,
+        id: impl Into<String>,
+        options: &SessionOptions,
+    ) -> Result<RawSession, crate::SamError> {
+        let mut stream = TcpStream::connect(&self.sam_addr)?;
+        hello(&mut stream)?;
+        let keys = generate_keys_on(&mut stream, DEFAULT_SIGNATURE_TYPE)?;
+        self.new_raw_session(id, &keys, options)
+    }
+
     pub fn new_keys(&self) -> Result<Keys, crate::SamError> {
         self.new_keys_with_signature_type(DEFAULT_SIGNATURE_TYPE)
     }
@@ -459,6 +497,70 @@ impl DatagramSession {
 
             buf[..data_len].copy_from_slice(&tmp[i + 1..n]);
             return Ok((data_len, Destination::new(sender)));
+        }
+    }
+
+    pub fn set_read_timeout(&self, dur: Option<Duration>) -> io::Result<()> {
+        self.socket.set_read_timeout(dur)
+    }
+
+    pub fn set_write_timeout(&self, dur: Option<Duration>) -> io::Result<()> {
+        self.socket.set_write_timeout(dur)
+    }
+}
+
+#[derive(Debug)]
+pub struct RawSession {
+    _control: TcpStream,
+    socket: UdpSocket,
+    pub(crate) sam_udp_addr: SocketAddr,
+    id: String,
+    keys: Keys,
+}
+
+impl RawSession {
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub fn sam_addr(&self) -> SocketAddr {
+        self.sam_udp_addr
+    }
+
+    pub fn local_destination(&self) -> &Destination {
+        self.keys.destination()
+    }
+
+    pub fn keys(&self) -> &Keys {
+        &self.keys
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_sam_udp_port(&mut self, port: u16) {
+        self.sam_udp_addr.set_port(port);
+    }
+
+    pub fn local_addr(&self) -> io::Result<SocketAddr> {
+        self.socket.local_addr()
+    }
+
+    pub fn send_to(&self, data: &[u8], dest: &Destination) -> Result<usize, crate::SamError> {
+        let header = format!("3.0 {} {}\n", self.id, dest);
+        let mut packet = header.into_bytes();
+        packet.extend_from_slice(data);
+        Ok(self.socket.send_to(&packet, self.sam_udp_addr)?)
+    }
+
+    pub fn read(&self, buf: &mut [u8]) -> Result<usize, crate::SamError> {
+        loop {
+            let (n, addr) = self
+                .socket
+                .recv_from(buf)
+                .map_err(|e| crate::SamError::Io(e.to_string()))?;
+            if addr.ip() != self.sam_udp_addr.ip() {
+                continue;
+            }
+            return Ok(n);
         }
     }
 
@@ -706,6 +808,28 @@ fn create_datagram_on(
     write!(
         stream,
         "SESSION CREATE STYLE=DATAGRAM ID={id} DESTINATION={} PORT={local_port} ",
+        keys.private_key()
+    )?;
+    for (key, value) in options.to_pairs() {
+        write!(stream, "{key}={value} ")?;
+    }
+    write!(stream, "SIGNATURE_TYPE={DEFAULT_SIGNATURE_TYPE}\n")?;
+    stream.flush()?;
+    let line = read_line(stream)?;
+    ensure_ok(&line)?;
+    Ok(())
+}
+
+fn create_raw_on(
+    stream: &mut TcpStream,
+    id: &str,
+    keys: &Keys,
+    options: &SessionOptions,
+    local_port: u16,
+) -> Result<(), crate::SamError> {
+    write!(
+        stream,
+        "SESSION CREATE STYLE=RAW ID={id} DESTINATION={} PORT={local_port} ",
         keys.private_key()
     )?;
     for (key, value) in options.to_pairs() {
@@ -1124,6 +1248,192 @@ mod tests {
         let mut buf = [0u8; 1024];
         let (n, sender) = session.recv_from(&mut buf).unwrap();
         assert_eq!(sender.as_str(), "real_sender");
+        assert_eq!(&buf[..n], b"correct data");
+        server.join();
+    }
+
+    #[test]
+    fn raw_session_create_sends_correct_sam_command() {
+        let server = FakeSam::spawn_many(vec![
+            Box::new(|mut stream| {
+                expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+                writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+                expect_line(&mut stream, "DEST GENERATE SIGNATURE_TYPE=7");
+                writeln!(stream, "DEST REPLY PUB=pubdest PRIV=privdest").unwrap();
+            }),
+            Box::new(|mut stream| {
+                expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+                writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+                let create = read_line(&mut stream);
+                assert!(
+                    create.starts_with("SESSION CREATE STYLE=RAW ID=raw_test DESTINATION=privdest ")
+                );
+                assert!(create.contains("PORT="));
+                writeln!(stream, "SESSION STATUS RESULT=OK").unwrap();
+            }),
+        ]);
+
+        let client = SamClient::connect(&server.addr);
+        let _ = client
+            .new_transient_raw_session("raw_test", &SessionOptions::zero_hop())
+            .unwrap();
+        server.join();
+    }
+
+    #[test]
+    fn raw_session_create_includes_options() {
+        let server = FakeSam::spawn_many(vec![
+            Box::new(|mut stream| {
+                expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+                writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+                expect_line(&mut stream, "DEST GENERATE SIGNATURE_TYPE=7");
+                writeln!(stream, "DEST REPLY PUB=pubdest PRIV=privdest").unwrap();
+            }),
+            Box::new(|mut stream| {
+                expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+                writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+                let create = read_line(&mut stream);
+                assert!(create.contains("inbound.length=3"));
+                writeln!(stream, "SESSION STATUS RESULT=OK").unwrap();
+            }),
+        ]);
+
+        let client = SamClient::connect(&server.addr);
+        let _ = client
+            .new_transient_raw_session("raw_test", &SessionOptions::default().inbound_length(3))
+            .unwrap();
+        server.join();
+    }
+
+    #[test]
+    fn raw_send_to_writes_correct_packet_format() {
+        let sam_udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let sam_udp_addr = sam_udp.local_addr().unwrap();
+        sam_udp.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+
+        let server = FakeSam::spawn_many(vec![
+            Box::new(|mut stream| {
+                expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+                writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+                expect_line(&mut stream, "DEST GENERATE SIGNATURE_TYPE=7");
+                writeln!(stream, "DEST REPLY PUB=pubdest PRIV=privdest").unwrap();
+            }),
+            Box::new(|mut stream| {
+                expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+                writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+                let _ = read_line(&mut stream);
+                writeln!(stream, "SESSION STATUS RESULT=OK").unwrap();
+            }),
+        ]);
+
+        let client_addr = format!(
+            "{}:{}",
+            sam_udp_addr.ip(),
+            server.addr.split(':').last().unwrap()
+        );
+        let client = SamClient::connect(&client_addr);
+        let session = client
+            .new_transient_raw_session("raw_id", &SessionOptions::zero_hop())
+            .unwrap();
+
+        let mut session = session;
+        session.set_sam_udp_port(sam_udp_addr.port());
+
+        let dest = Destination::new("target_dest");
+        session.send_to(b"hello world", &dest).unwrap();
+
+        let mut buf = [0u8; 1024];
+        let (n, _) = sam_udp.recv_from(&mut buf).unwrap();
+        let packet = String::from_utf8_lossy(&buf[..n]);
+        assert_eq!(packet, "3.0 raw_id target_dest\nhello world");
+        server.join();
+    }
+
+    #[test]
+    fn raw_read_returns_payload_without_header() {
+        let sam_udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let sam_udp_addr = sam_udp.local_addr().unwrap();
+
+        let server = FakeSam::spawn_many(vec![
+            Box::new(|mut stream| {
+                expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+                writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+                expect_line(&mut stream, "DEST GENERATE SIGNATURE_TYPE=7");
+                writeln!(stream, "DEST REPLY PUB=pubdest PRIV=privdest").unwrap();
+            }),
+            Box::new(|mut stream| {
+                expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+                writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+                let _ = read_line(&mut stream);
+                writeln!(stream, "SESSION STATUS RESULT=OK").unwrap();
+            }),
+        ]);
+
+        let client_addr = format!(
+            "{}:{}",
+            sam_udp_addr.ip(),
+            server.addr.split(':').last().unwrap()
+        );
+        let client = SamClient::connect(&client_addr);
+        let session = client
+            .new_transient_raw_session("raw_id", &SessionOptions::zero_hop())
+            .unwrap();
+
+        let mut session = session;
+        session.set_sam_udp_port(sam_udp_addr.port());
+
+        let local_addr = session.local_addr().unwrap();
+        sam_udp.send_to(b"raw data", local_addr).unwrap();
+
+        let mut buf = [0u8; 1024];
+        let n = session.read(&mut buf).unwrap();
+        assert_eq!(&buf[..n], b"raw data");
+        server.join();
+    }
+
+    #[test]
+    fn raw_read_ignores_packets_not_from_sam_ip() {
+        let sam_udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let sam_udp_addr = sam_udp.local_addr().unwrap();
+
+        let server = FakeSam::spawn_many(vec![
+            Box::new(|mut stream| {
+                expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+                writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+                expect_line(&mut stream, "DEST GENERATE SIGNATURE_TYPE=7");
+                writeln!(stream, "DEST REPLY PUB=pubdest PRIV=privdest").unwrap();
+            }),
+            Box::new(|mut stream| {
+                expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+                writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+                let _ = read_line(&mut stream);
+                writeln!(stream, "SESSION STATUS RESULT=OK").unwrap();
+            }),
+        ]);
+
+        let client_addr = format!(
+            "{}:{}",
+            sam_udp_addr.ip(),
+            server.addr.split(':').last().unwrap()
+        );
+        let client = SamClient::connect(&client_addr);
+        let session = client
+            .new_transient_raw_session("raw_id", &SessionOptions::zero_hop())
+            .unwrap();
+
+        let mut session = session;
+        session.set_sam_udp_port(sam_udp_addr.port());
+
+        session.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+        let local_addr = session.local_addr().unwrap();
+
+        let wrong_udp = UdpSocket::bind("127.0.0.2:0").unwrap();
+        wrong_udp.send_to(b"fake data", local_addr).unwrap();
+
+        sam_udp.send_to(b"correct data", local_addr).unwrap();
+
+        let mut buf = [0u8; 1024];
+        let n = session.read(&mut buf).unwrap();
         assert_eq!(&buf[..n], b"correct data");
         server.join();
     }

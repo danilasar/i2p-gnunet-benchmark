@@ -13,7 +13,7 @@ testbed/src/node/
     i2pd.rs        I2pdNode, reseed ZIP, RouterInfo hash
 
 sam3/src/
-    session.rs     ручной SAM3 поверх TCP
+    session.rs     SamClient, StreamSession, StreamListener, ручной SAM3 поверх TCP
 
 sam-bench/src/
     messages.rs    JSON ready/result для transfer-теста
@@ -76,6 +76,17 @@ tp.nodes[i].veth;  // veth внутри namespace
 - `SESSION CREATE STYLE=STREAM ...`
 - `STREAM CONNECT`
 - `STREAM ACCEPT`
+
+Публичный STREAM API:
+
+```rust
+let client = sam3::SamClient::connect("127.0.0.1:7656");
+let session = client.new_stream_session("app", sam3::SAM_TUNNEL_OPTIONS)?;
+let dest = session.destination();
+let mut outgoing = session.dial(dest)?;
+let listener = session.listen();
+let mut incoming = listener.accept()?;
+```
 
 STREAM session options:
 

@@ -21,6 +21,79 @@ pub struct SamSession {
     pub destination: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct SamClient {
+    sam_addr: String,
+}
+
+impl SamClient {
+    pub fn connect(sam_addr: impl Into<String>) -> Self {
+        Self {
+            sam_addr: sam_addr.into(),
+        }
+    }
+
+    pub fn new_stream_session(
+        &self,
+        id: impl Into<String>,
+        options: &[(&str, &str)],
+    ) -> Result<StreamSession, Box<dyn Error>> {
+        let id = id.into();
+        let session = SamSession::create_stream(&self.sam_addr, &id, options)?;
+        Ok(StreamSession {
+            sam_addr: self.sam_addr.clone(),
+            id,
+            session,
+        })
+    }
+}
+
+pub struct StreamSession {
+    sam_addr: String,
+    id: String,
+    session: SamSession,
+}
+
+impl StreamSession {
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub fn sam_addr(&self) -> &str {
+        &self.sam_addr
+    }
+
+    pub fn destination(&self) -> &str {
+        &self.session.destination
+    }
+
+    pub fn dial(&self, dest: &str) -> Result<TcpStream, Box<dyn Error>> {
+        SamSession::connect_stream(&self.sam_addr, &self.id, dest)
+    }
+
+    pub fn listen(&self) -> StreamListener {
+        StreamListener {
+            sam_addr: self.sam_addr.clone(),
+            id: self.id.clone(),
+        }
+    }
+}
+
+pub struct StreamListener {
+    sam_addr: String,
+    id: String,
+}
+
+impl StreamListener {
+    pub fn accept(&self) -> Result<TcpStream, Box<dyn Error>> {
+        SamSession::accept_stream(&self.sam_addr, &self.id)
+    }
+
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+}
+
 impl SamSession {
     pub fn create_stream(
         sam_addr: &str,

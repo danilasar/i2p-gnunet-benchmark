@@ -1,3 +1,3 @@
 pub mod session;
 
-pub use session::{SamSession, SAM_TUNNEL_OPTIONS};
+pub use session::{SamClient, SamSession, StreamListener, StreamSession, SAM_TUNNEL_OPTIONS};

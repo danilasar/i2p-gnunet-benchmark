@@ -2,7 +2,7 @@ use super::{
     messages::{ReadyMsg, ResultMsg},
     wire::receive_payload,
 };
-use sam3::{SamSession, SAM_TUNNEL_OPTIONS};
+use sam3::{SamClient, SAM_TUNNEL_OPTIONS};
 use std::{
     error::Error,
     io::Write,
@@ -29,12 +29,14 @@ pub fn run_receiver(cfg: ReceiverConfig, w: &mut impl Write) -> Result<(), Box<d
             Err(msg.into())
         };
 
-    let session = match SamSession::create_stream(&cfg.sam_addr, &cfg.id, SAM_TUNNEL_OPTIONS) {
+    let client = SamClient::connect(&cfg.sam_addr);
+    let session = match client.new_stream_session(&cfg.id, SAM_TUNNEL_OPTIONS) {
         Ok(s) => s,
         Err(e) => return fail(&mut res, w, format!("SAM session: {e}")),
     };
+    let listener = session.listen();
 
-    serde_json::to_writer(&mut *w, &ReadyMsg::new(session.destination.clone()))?;
+    serde_json::to_writer(&mut *w, &ReadyMsg::new(session.destination().to_string()))?;
     writeln!(w)?;
     w.flush()?;
 
@@ -44,7 +46,7 @@ pub fn run_receiver(cfg: ReceiverConfig, w: &mut impl Write) -> Result<(), Box<d
         }
 
         let t_accept = Instant::now();
-        let mut conn = match SamSession::accept_stream(&cfg.sam_addr, &cfg.id) {
+        let mut conn = match listener.accept() {
             Ok(c) => c,
             Err(e) => return fail(&mut res, w, format!("Accept: {e}")),
         };

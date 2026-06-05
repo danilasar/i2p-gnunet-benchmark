@@ -1,5 +1,5 @@
 use super::{messages::ResultMsg, payload::PayloadReader, wire::send_payload};
-use sam3::{SamSession, SAM_TUNNEL_OPTIONS};
+use sam3::{SamClient, SamSession, StreamSession, SAM_TUNNEL_OPTIONS};
 use std::{
     error::Error,
     io::Write,
@@ -30,17 +30,13 @@ pub fn run_sender(cfg: SenderConfig, w: &mut impl Write) -> Result<(), Box<dyn E
 
     let t0 = Instant::now();
     let deadline = t0 + cfg.timeout;
-    let session = match SamSession::create_stream(&cfg.sam_addr, &cfg.id, SAM_TUNNEL_OPTIONS) {
+    let client = SamClient::connect(&cfg.sam_addr);
+    let session = match client.new_stream_session(&cfg.id, SAM_TUNNEL_OPTIONS) {
         Ok(s) => s,
         Err(e) => return fail(&mut res, w, format!("SAM session: {e}")),
     };
 
-    let mut conn = match dial_with_retry(
-        cfg.sam_addr.clone(),
-        cfg.id.clone(),
-        cfg.dest.clone(),
-        deadline,
-    ) {
+    let mut conn = match dial_with_retry(&session, cfg.dest.clone(), deadline) {
         Ok(c) => c,
         Err(e) => return fail(&mut res, w, format!("DialI2P: {e}")),
     };
@@ -71,8 +67,7 @@ pub fn run_sender(cfg: SenderConfig, w: &mut impl Write) -> Result<(), Box<dyn E
 }
 
 fn dial_with_retry(
-    sam_addr: String,
-    id: String,
+    session: &StreamSession,
     dest: String,
     deadline: Instant,
 ) -> Result<TcpStream, Box<dyn Error>> {
@@ -82,8 +77,8 @@ fn dial_with_retry(
 
     loop {
         let (tx, rx) = mpsc::channel();
-        let sam_addr_attempt = sam_addr.clone();
-        let id_attempt = id.clone();
+        let sam_addr_attempt = session.sam_addr().to_string();
+        let id_attempt = session.id().to_string();
         let dest_attempt = dest.clone();
         thread::spawn(move || {
             let result = SamSession::connect_stream(&sam_addr_attempt, &id_attempt, &dest_attempt);

@@ -457,3 +457,26 @@ CI обновлён: после сборки Docker-образа добавле�
 - `cargo test -p sam3 -p sam-bench -p sam-sender -p sam-receiver` — PASS;
 - `cargo test -p testbed --lib` — PASS;
 - `cargo test --workspace --no-run` — PASS.
+
+Следующий шаг: добавить в `sam3` публичный ergonomic API поверх текущих низкоуровневых
+функций: `SamClient`, `StreamSession`, `StreamListener`. На этом этапе API остаётся
+transient-destination only; keyfile/lookup/options builder будут отдельными шагами.
+
+Реализовано:
+- `SamClient::connect(addr)`;
+- `SamClient::new_stream_session(id, options)`;
+- `StreamSession::{id, sam_addr, destination, dial, listen}`;
+- `StreamListener::{id, accept}`;
+- `sam-bench` переключён на `SamClient` для создания session/listener, но retry sender
+  по-прежнему делает только `STREAM CONNECT` на попытку, без повторного `SESSION CREATE`.
+
+Добавлены fake SAM tests для нового API:
+- создание stream session через `SamClient`;
+- `StreamSession::dial`;
+- `StreamListener::accept`.
+
+Проверки:
+- `just test-unit` — PASS;
+- `cargo test --workspace --no-run` — PASS.
+- `just test-transfer` — PASS (`setup≈9093ms`, `transfer≈2ms`,
+  `goodput≈4194 Mbps`, `first_byte≈9404ms`).

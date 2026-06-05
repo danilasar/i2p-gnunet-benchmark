@@ -10,6 +10,7 @@ i2pd/SAM STREAM и GNUnet/CADET.
 | Изолированная сеть (netns + veth + bridge) | ✓ |
 | GNUnet: запуск пиров, HELLO-обмен, проверка CORE-соединения | ✓ |
 | i2pd: запуск нод, ZIP reseed bootstrap, проверка SAM bridge | ✓ |
+| SAM3 core API (`SamClient`, `StreamSession`, fake SAM tests) | ✓ |
 | SAM STREAM sender/receiver на Rust | ✓ |
 | Интеграционный transfer-тест 1 MiB через SAM STREAM | ✓ |
 | TODO: убрать полный bootstrap в `test_sam_transfer` — сейчас nodes 1-3 заранее получают `RouterInfo` всех нод через `reseed_full.zip`; целевое поведение — discovery от seed/floodfill-ноды без знания всех участников | TODO |

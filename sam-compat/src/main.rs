@@ -1,5 +1,5 @@
 use clap::Parser;
-use sam3::{SamClient, SamConn, SamError, SessionOptions, StreamSession, StreamSubSession};
+use sam3::{SamClient, SamConn, SamError, SessionOptions, StreamSession};
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::io::{Read, Write};
@@ -233,7 +233,7 @@ fn run_primary_sender(args: Args) -> Result<(), Box<dyn Error>> {
     let sub = primary.new_stream_sub_session(format!("{}-sub", args.id))?;
 
     let deadline = Instant::now() + Duration::from_secs(120);
-    let mut conn = dial_sub_with_retry(&sub, &dest, deadline)?;
+    let mut conn = dial_with_retry(&sub, &dest, deadline)?;
 
     conn.write_all(msg.as_bytes())?;
     conn.flush()?;
@@ -247,26 +247,6 @@ fn run_primary_sender(args: Args) -> Result<(), Box<dyn Error>> {
 
     output_result(true, "");
     Ok(())
-}
-
-fn dial_sub_with_retry(session: &StreamSubSession, dest: &str, deadline: Instant) -> Result<SamConn, Box<dyn Error>> {
-    let per_attempt = Duration::from_secs(90);
-    let retry_interval = Duration::from_secs(5);
-    loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Err("dial deadline exceeded".into());
-        }
-        match session.dial_timeout(dest, per_attempt.min(remaining)) {
-            Ok(conn) => return Ok(conn),
-            Err(SamError::CantReachPeer | SamError::Timeout) => {}
-            Err(e) => return Err(e.into()),
-        }
-        if Instant::now() + retry_interval > deadline {
-            return Err("dial deadline exceeded after retry interval".into());
-        }
-        thread::sleep(retry_interval);
-    }
 }
 
 fn run_primary_receiver(args: Args) -> Result<(), Box<dyn Error>> {

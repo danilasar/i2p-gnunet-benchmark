@@ -1242,3 +1242,92 @@ RAW-получатель не знает адрес отправителя и н
 - `cargo test --lib` — 92 теста, PASS, 0 предупреждений.
   (58 новых в proto/, 34 унаследованных из session.rs и error.rs)
 - `cargo build -p sam3` — PASS.
+
+## 2026-06-06 — Синхронный слой sync/ и рефакторинг архитектуры
+
+### Цель
+
+Второй шаг большого рефакторинга: реализовать синхронный I/O-слой `src/sync/`
+поверх `proto/`, удалить монолитный `session.rs`, ввести машину состояний в
+точках создания соединений, расширить тестовое покрытие.
+
+### Реализовано
+
+**Архитектурные изменения:**
+- Удалён монолитный `src/session.rs` (~2000 строк). Публичный API полностью
+  воссоздан в `src/sync/`.
+- `src/sync/mod.rs` — вспомогательные функции `sam_handshake`, `sam_open`,
+  `read_line`, `write_cmd`, `generate_keys_on_new_conn`. Разделение `sam_open`
+  на `sam_open` + `sam_handshake` позволяет устанавливать таймауты до HELLO.
+- `src/sync/options.rs` — `SessionOptions`, `StreamConnectOptions`,
+  `RawSessionOptions`.
+- `src/sync/client.rs` — `SamClient` со всеми типами сессий.
+- `src/sync/stream.rs` — `StreamSession`, `StreamListener`, `SamConn`,
+  `ForwardGuard`, `Incoming`. `SessionKind` enum (`Standalone`/`SubSession`)
+  унифицирует standalone-сессии и подсессии.
+- `src/sync/datagram.rs` — `DatagramSession`,
+  `_control: Option<TcpStream>` (`None` для подсессий).
+- `src/sync/raw.rs` — `RawSession`, аналогично.
+- `src/sync/primary.rs` — `PrimarySession` с
+  `Arc<Mutex<BufReader<TcpStream>>>` в качестве control-сокета.
+
+**Новые возможности SAM 3.3:**
+- `FROM_PORT`/`TO_PORT` в `STREAM CONNECT`.
+- `PROTOCOL`/`HEADER` в `SESSION CREATE STYLE=RAW`.
+- `HOST` в `STREAM FORWARD`.
+- `SESSION ADD`/`REMOVE`.
+- `PING`/`PONG`.
+- `StreamSession::forward_to(port, host, silent)`.
+
+**Breaking change:** `StreamSubSession` убран из публичного API.
+`PrimarySession::new_stream_sub_session()` возвращает `StreamSession`
+через `SessionKind::SubSession`.
+
+**Исправления по итогам ревью:**
+- `dial_timeout` и `accept_timeout` использовали inline HELLO без
+  `SessionController`. Исправлено через `sam_handshake`: таймаут
+  устанавливается на `TcpStream` до HELLO; `accept_timeout` также
+  получил `set_write_timeout` (ранее отсутствовал).
+- `_control: Option<TcpStream>` в `DatagramSession`/`RawSession`:
+  `None` для подсессий вместо хака `try_clone()`.
+- Удалён мёртвый `SessionController::new()` в
+  `primary.rs::new_stream_sub_session`.
+- Удалён артефакт `session.rs_tail.txt`.
+
+**sam-compat:**
+- Убран тип `StreamSubSession`; `dial_sub_with_retry` объединён
+  с `dial_with_retry`.
+- Добавлены роли `datagram-sender/receiver`, `raw-sender/receiver`,
+  `primary-sender/receiver` (совместимость с `go-sam3-peer`).
+
+**Тесты:**
+- Старый `tests/fake_sam.rs` (9 тестов) заменён структурированным
+  набором в `tests/{client,stream,datagram,raw,primary}.rs` +
+  `tests/common/mod.rs`.
+- Итого: 71 unit-тест (`src/`) + 26 интеграционных (`tests/`) = 97 тестов.
+
+### Нетривиальные решения
+
+**`sam_handshake` vs `sam_open_with_timeout`** — вместо дублирования логики
+выделена `sam_handshake(stream: TcpStream)`, принимающая уже подключённый поток.
+`sam_open` стала тонкой обёрткой. Вызывающий код устанавливает таймауты до
+вызова `sam_handshake`.
+
+**`Option<TcpStream>` для контроля lifetime подсессий** —
+`Some(stream)` для standalone (RAII закрывает сессию при drop),
+`None` для подсессий (lifetime управляется `PrimarySession`
+через `Arc<Mutex<...>>`). Убирает хак `try_clone()`.
+
+**`SessionKind` для унификации `StreamSession`** — вместо отдельного
+`StreamSubSession` введён `enum SessionKind { Standalone(TcpStream),
+SubSession(Arc<Mutex<BufReader<TcpStream>>>) }`. Оба случая — один тип.
+
+**`begin_session_add` возвращает `()` вместо `&str`** — возврат `&str`
+(заимствование из `self.state`) конфликтовал с мутацией в Poisoned-ветке.
+Изменён тип; caller использует `ctrl.destination()` отдельно.
+
+### Проверки
+
+- `cargo test -p sam3` — 97 тестов (71 unit + 26 интеграционных), PASS,
+  0 предупреждений.
+- `cargo build -p sam-compat` — PASS.

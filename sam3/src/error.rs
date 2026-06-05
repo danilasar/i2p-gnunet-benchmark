@@ -17,6 +17,8 @@ pub enum SamError {
     UnexpectedResponse(String),
     Io(String),
     Poisoned(String),
+    PeerNotFound,
+    DatagramTooLarge { max: usize, got: usize },
 }
 
 impl SamError {
@@ -31,6 +33,7 @@ impl SamError {
             "DUPLICATED_ID" => SamError::DuplicatedId,
             "CANT_REACH_PEER" => SamError::CantReachPeer,
             "KEY_NOT_FOUND" => SamError::KeyNotFound,
+            "PEER_NOT_FOUND" => SamError::PeerNotFound,
             "INVALID_KEY" => SamError::InvalidKey,
             "INVALID_ID" => SamError::InvalidId,
             "TIMEOUT" => SamError::Timeout,
@@ -49,6 +52,7 @@ impl fmt::Display for SamError {
             SamError::DuplicatedId => f.write_str("DUPLICATED_ID"),
             SamError::CantReachPeer => f.write_str("CANT_REACH_PEER"),
             SamError::KeyNotFound => f.write_str("KEY_NOT_FOUND"),
+            SamError::PeerNotFound => f.write_str("PEER_NOT_FOUND"),
             SamError::InvalidKey => f.write_str("INVALID_KEY"),
             SamError::InvalidId => f.write_str("INVALID_ID"),
             SamError::Timeout => f.write_str("TIMEOUT"),
@@ -59,6 +63,9 @@ impl fmt::Display for SamError {
             SamError::UnexpectedResponse(line) => write!(f, "unexpected SAM response: {line}"),
             SamError::Io(msg) => write!(f, "IO error: {msg}"),
             SamError::Poisoned(msg) => write!(f, "session poisoned: {msg}"),
+            SamError::DatagramTooLarge { max, got } => {
+                write!(f, "datagram too large: max {max} bytes, got {got}")
+            }
         }
     }
 }
@@ -117,6 +124,22 @@ mod tests {
             SamError::from_result_line("SESSION STATUS RESULT=DUPLICATED_ID"),
             SamError::DuplicatedId
         );
+    }
+
+    #[test]
+    fn from_result_line_parses_peer_not_found() {
+        assert_eq!(
+            SamError::from_result_line("STREAM STATUS RESULT=PEER_NOT_FOUND"),
+            SamError::PeerNotFound
+        );
+    }
+
+    #[test]
+    fn display_datagram_too_large() {
+        let e = SamError::DatagramTooLarge { max: 100, got: 200 };
+        let s = format!("{}", e);
+        assert!(s.contains("100"));
+        assert!(s.contains("200"));
     }
 
     #[test]

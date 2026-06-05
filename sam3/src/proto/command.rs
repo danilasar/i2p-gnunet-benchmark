@@ -13,9 +13,9 @@ pub fn dest_generate(sig_type: &str) -> String {
     format!("DEST GENERATE SIGNATURE_TYPE={}\n", sig_type)
 }
 
-/// SESSION CREATE STYLE=STREAM ID={id} DESTINATION={dest} SIGNATURE_TYPE=7 {opts}\n
+/// SESSION CREATE STYLE=STREAM ID={id} DESTINATION={dest} {opts}\n
 pub fn session_create_stream(id: &str, dest: &str, opts: &str) -> String {
-    let mut cmd = format!("SESSION CREATE STYLE=STREAM ID={} DESTINATION={} SIGNATURE_TYPE={}", id, dest, DEFAULT_SIGNATURE_TYPE);
+    let mut cmd = format!("SESSION CREATE STYLE=STREAM ID={} DESTINATION={}", id, dest);
     if !opts.is_empty() {
         cmd.push(' ');
         cmd.push_str(opts);
@@ -24,11 +24,11 @@ pub fn session_create_stream(id: &str, dest: &str, opts: &str) -> String {
     cmd
 }
 
-/// SESSION CREATE STYLE=DATAGRAM ID={id} DESTINATION={dest} PORT={udp_port} HOST=127.0.0.1 SIGNATURE_TYPE=7 {opts}\n
+/// SESSION CREATE STYLE=DATAGRAM ID={id} DESTINATION={dest} PORT={udp_port} {opts}\n
 pub fn session_create_datagram(id: &str, dest: &str, udp_port: u16, opts: &str) -> String {
     let mut cmd = format!(
-        "SESSION CREATE STYLE=DATAGRAM ID={} DESTINATION={} PORT={} HOST=127.0.0.1 SIGNATURE_TYPE={}",
-        id, dest, udp_port, DEFAULT_SIGNATURE_TYPE
+        "SESSION CREATE STYLE=DATAGRAM ID={} DESTINATION={} PORT={}",
+        id, dest, udp_port
     );
     if !opts.is_empty() {
         cmd.push(' ');
@@ -38,7 +38,7 @@ pub fn session_create_datagram(id: &str, dest: &str, udp_port: u16, opts: &str) 
     cmd
 }
 
-/// SESSION CREATE STYLE=RAW ID={id} DESTINATION={dest} PORT={udp_port} HOST=127.0.0.1 SIGNATURE_TYPE=7
+/// SESSION CREATE STYLE=RAW ID={id} DESTINATION={dest} PORT={udp_port}
 /// [PROTOCOL={protocol}] [HEADER=true] {opts}\n
 pub fn session_create_raw(
     id: &str,
@@ -49,8 +49,8 @@ pub fn session_create_raw(
     opts: &str,
 ) -> String {
     let mut cmd = format!(
-        "SESSION CREATE STYLE=RAW ID={} DESTINATION={} PORT={} HOST=127.0.0.1 SIGNATURE_TYPE={}",
-        id, dest, udp_port, DEFAULT_SIGNATURE_TYPE
+        "SESSION CREATE STYLE=RAW ID={} DESTINATION={} PORT={}",
+        id, dest, udp_port
     );
     if let Some(p) = protocol {
         cmd.push_str(&format!(" PROTOCOL={}", p));
@@ -66,9 +66,9 @@ pub fn session_create_raw(
     cmd
 }
 
-/// SESSION CREATE STYLE=PRIMARY ID={id} DESTINATION={dest} SIGNATURE_TYPE=7 {opts}\n
+/// SESSION CREATE STYLE=PRIMARY ID={id} DESTINATION={dest} {opts}\n
 pub fn session_create_primary(id: &str, dest: &str, opts: &str) -> String {
-    let mut cmd = format!("SESSION CREATE STYLE=PRIMARY ID={} DESTINATION={} SIGNATURE_TYPE={}", id, dest, DEFAULT_SIGNATURE_TYPE);
+    let mut cmd = format!("SESSION CREATE STYLE=PRIMARY ID={} DESTINATION={}", id, dest);
     if !opts.is_empty() {
         cmd.push(' ');
         cmd.push_str(opts);
@@ -164,7 +164,7 @@ mod tests {
     fn session_create_stream_no_opts() {
         assert_eq!(
             session_create_stream("id", "dest", ""),
-            "SESSION CREATE STYLE=STREAM ID=id DESTINATION=dest SIGNATURE_TYPE=7\n"
+            "SESSION CREATE STYLE=STREAM ID=id DESTINATION=dest\n"
         );
     }
 
@@ -172,15 +172,14 @@ mod tests {
     fn session_create_stream_with_opts() {
         assert_eq!(
             session_create_stream("id", "dest", "inbound.length=0"),
-            "SESSION CREATE STYLE=STREAM ID=id DESTINATION=dest SIGNATURE_TYPE=7 inbound.length=0\n"
+            "SESSION CREATE STYLE=STREAM ID=id DESTINATION=dest inbound.length=0\n"
         );
     }
 
     #[test]
-    fn session_create_datagram_contains_port_host() {
+    fn session_create_datagram_contains_port() {
         let cmd = session_create_datagram("id", "dest", 7777, "");
         assert!(cmd.contains("PORT=7777"));
-        assert!(cmd.contains("HOST=127.0.0.1"));
     }
 
     #[test]

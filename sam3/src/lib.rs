@@ -1,10 +1,12 @@
 pub mod error;
 pub mod proto;
-pub mod session;
+pub mod sync;
 
 pub use error::SamError;
-pub use session::{
+pub use sync::{
     DatagramSession, Destination, ForwardGuard, Incoming, Keys, PrimarySession, PrivateKey, RawSession,
-    SamClient, SamConn, SamSession, SessionOptions, StreamListener, StreamSession,
-    StreamSubSession, DEFAULT_SIGNATURE_TYPE,
+    SamClient, SamConn, SessionOptions, StreamConnectOptions, RawSessionOptions,
+    StreamListener, StreamSession,
 };
+
+pub const DEFAULT_SIGNATURE_TYPE: &str = crate::proto::command::DEFAULT_SIGNATURE_TYPE;

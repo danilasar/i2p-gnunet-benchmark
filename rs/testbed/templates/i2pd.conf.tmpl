@@ -1,0 +1,38 @@
+host = {{ host }}
+nat = false
+reservedrange = false
+bandwidth = X
+
+[reseed]
+urls =
+threshold = 50
+{% if zip_file %}zipfile = {{ zip_file }}{% endif %}
+verify = false
+
+[ntcp2]
+enabled = true
+published = true
+port = {{ port }}
+
+[ssu2]
+enabled = false
+
+[httpproxy]
+enabled = false
+
+[socksproxy]
+enabled = false
+
+[http]
+enabled = false
+
+[exploratory]
+inbound.length = 1
+outbound.length = 1
+inbound.quantity = 2
+outbound.quantity = 2
+
+[sam]
+enabled = {{ sam_enabled }}
+address = 127.0.0.1
+port = {{ sam_port }}

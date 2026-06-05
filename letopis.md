@@ -283,3 +283,66 @@ SAM destination.
 По замечанию о текущем bootstrap в `TestSAMTransfer` добавлен пункт TODO в таблицу README:
 сейчас nodes 1-3 заранее получают `RouterInfo` всех нод через `reseed_full.zip`, а целевое
 поведение — discovery от seed/floodfill-ноды без знания всех участников.
+
+## Рабочее правило, 2026-06-05
+
+Принято правило для следующих этапов: отмечать ход работы в `letopis.md`, включая текущие
+ошибки, способы их исправления и принимаемые решения.
+
+Коммиты оформлять в стиле:
+`english_conventional_tag: русское описание коммита`.
+
+## Переписывание Go-проекта на Rust, 2026-06-05
+
+Начат перенос Go-оркестратора и SAM sender/receiver в Rust workspace `rs/`.
+Go-код оставлен без изменений для сравнения.
+
+Проверен crate `yosemite`:
+- `cargo search yosemite` показал актуальную версию `0.7.0`;
+- docs.rs и исходники crate подтверждают наличие sync/async API для `Session<Stream>`,
+  `destination()`, `connect()` и `accept()`;
+- sync API формирует при `SESSION CREATE` только часть нужных tunnel options
+  (`inbound.length`, `outbound.length`, `inbound.quantity`, `outbound.quantity`) и не даёт
+  точно передать весь набор из Go (`lengthVariance`, `backupQuantity`).
+
+Решение: SAM3 реализован вручную поверх TCP, чтобы сохранить идентичные команды:
+`HELLO`, `DEST GENERATE`, `SESSION CREATE`, `STREAM CONNECT`, `STREAM ACCEPT`, включая все
+zero-hop tunnel options.
+
+Реализовано:
+- `rs/testbed` как библиотека с модулями `topology`, `node::{i2pd,gnunet}`, `sam`;
+- Rust CLI `sam-sender` и `sam-receiver`;
+- интеграционные тесты `test_gnunet_smoke`, `test_i2pd_smoke`, `test_sam_transfer`;
+- шаблоны `i2pd.conf.tmpl` и `gnunet.conf.tmpl` перенесены в `rs/testbed/templates`;
+- `Dockerfile` и `Justfile` переключены на сборку Rust sender/receiver.
+
+Текущие проверки:
+- `cargo build --release --manifest-path rs/Cargo.toml` — PASS;
+- `cargo test --manifest-path rs/Cargo.toml -p testbed --no-run` — PASS.
+
+Следующий этап: собрать Docker-образ и прогнать Rust-интеграционные тесты внутри
+`--privileged` контейнера.
+
+При первом `just build` Docker-сборка упала на `apt-get install cargo rust`: в ALT Sisyphus
+пакет `cargo` не найден. Решение: убрать `cargo`/`rust` из apt-пакетов и установить stable
+toolchain через rustup (`curl https://sh.rustup.rs | sh -s -- -y`), затем добавить
+`/root/.cargo/bin` в `PATH`.
+
+Финальные проверки Rust-порта:
+- `cargo build --release --manifest-path rs/Cargo.toml` — PASS;
+- `cargo test --manifest-path rs/Cargo.toml -p testbed --no-run` — PASS;
+- `just build` — PASS, образ `coursework-overlay:latest` собирает Rust sender/receiver;
+- Docker: `test_gnunet_smoke` — PASS (~10 сек);
+- Docker: `test_i2pd_smoke` — PASS (~56 сек);
+- `just test-transfer` — PASS (`setup≈9093ms`, `transfer≈2ms`,
+  `goodput≈4194 Mbps`, `first_byte≈9403ms`);
+- `just test-rust` — PASS, все Rust-интеграционные тесты последовательно
+  (`setup≈6092ms`, `transfer≈2ms`, `goodput≈4194 Mbps`, `first_byte≈6418ms`).
+
+После успешных прогонов каталог `tmp/test-artifacts` оказался root-owned из контейнера.
+Обычный `rm -rf tmp` с хоста завершился `Permission denied`; каталог удалён через
+`docker run --rm -v $(pwd):/workspace ... rm -rf /workspace/tmp`.
+
+Также после Docker-сборок часть файлов в игнорируемом `rs/target` стала root-owned.
+Чтобы не мешать последующим локальным `cargo build`, владелец `rs/target` возвращён
+на пользователя `1000:1000` через контейнерный `chown`.

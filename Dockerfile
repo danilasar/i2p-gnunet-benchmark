@@ -14,10 +14,14 @@ RUN apt-get update && apt-get install -y \
     iputils \
     && apt-get clean
 
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+ENV PATH="/root/.cargo/bin:${PATH}"
+
 WORKDIR /workspace
 
 
 # Build binaries
 COPY . /workspace
-RUN go build -o /usr/local/bin/sam-sender ./cmd/sam-sender/
-RUN go build -o /usr/local/bin/sam-receiver ./cmd/sam-receiver/
+RUN cargo build --release --manifest-path /workspace/rs/Cargo.toml
+RUN cp /workspace/rs/target/release/sam-sender /usr/local/bin/sam-sender
+RUN cp /workspace/rs/target/release/sam-receiver /usr/local/bin/sam-receiver

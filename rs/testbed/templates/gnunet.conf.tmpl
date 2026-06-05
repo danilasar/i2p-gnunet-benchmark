@@ -1,0 +1,46 @@
+# Подключаем стандартные конфиги GNUnet
+@INLINE@ /usr/share/gnunet/config.d/arm.conf
+@INLINE@ /usr/share/gnunet/config.d/transport.conf
+@INLINE@ /usr/share/gnunet/config.d/core.conf
+@INLINE@ /usr/share/gnunet/config.d/cadet.conf
+@INLINE@ /usr/share/gnunet/config.d/dht.conf
+@INLINE@ /usr/share/gnunet/config.d/peerstore.conf
+@INLINE@ /usr/share/gnunet/config.d/statistics.conf
+@INLINE@ /usr/share/gnunet/config.d/hostlist.conf
+
+[PATHS]
+GNUNET_HOME = {{ data_dir }}
+GNUNET_RUNTIME_DIR = {{ data_dir }}/run
+GNUNET_USER_RUNTIME_DIR = {{ data_dir }}/run
+GNUNET_CACHE_HOME = {{ data_dir }}/.cache/gnunet
+GNUNET_DATA_HOME = {{ data_dir }}/data
+
+[GLOBAL]
+FORCE_LOG = DEBUG
+
+[arm]
+OPTIONS = -l {{ data_dir }}/.cache/gnunet/gnunet.log
+
+[hostlist]
+# Отключаем внешний bootstrap
+SERVERS =
+HTTPPORT = 0
+
+[transport]
+IMMEDIATE_START = YES
+
+[communicator-tcp]
+BINDTO = {{ ip }}:{{ port }}
+IMMEDIATE_START = YES
+
+[nse]
+START_ON_DEMAND = NO
+IMMEDIATE_START = NO
+
+[communicator-udp]
+# Отключаем UDP (упрощаем smoke-тест)
+IMMEDIATE_START = NO
+
+[nat]
+# Нет NAT в netns
+ENABLE_UPNP = NO

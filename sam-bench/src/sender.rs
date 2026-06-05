@@ -1,9 +1,8 @@
 use super::{messages::ResultMsg, payload::PayloadReader, wire::send_payload};
-use sam3::{Destination, SamClient, SamConn, SamSession, StreamSession, SAM_TUNNEL_OPTIONS};
+use sam3::{SamClient, SamConn, SamError, StreamSession, SAM_TUNNEL_OPTIONS};
 use std::{
     error::Error,
     io::Write,
-    sync::mpsc,
     thread,
     time::{Duration, Instant},
 };
@@ -69,30 +68,19 @@ fn dial_with_retry(
     session: &StreamSession,
     dest: String,
     deadline: Instant,
-) -> Result<SamConn, Box<dyn Error>> {
+) -> Result<SamConn, SamError> {
     let per_attempt = Duration::from_secs(90);
     let retry_interval = Duration::from_secs(5);
-    loop {
-        let (tx, rx) = mpsc::channel();
-        let sam_addr_attempt = session.sam_addr().to_string();
-        let id_attempt = session.id().to_string();
-        let local_dest = session.destination().clone();
-        let dest_attempt = dest.clone();
-        thread::spawn(move || {
-            let result = SamSession::connect_stream(&sam_addr_attempt, &id_attempt, &dest_attempt)
-                .map(|stream| SamConn::new(stream, local_dest, Destination::new(dest_attempt)));
-            let _ = tx.send(result.map_err(|e| e.to_string()));
-        });
 
-        let last_error: String;
-        match rx.recv_timeout(per_attempt) {
-            Ok(Ok(conn)) => return Ok(conn),
-            Ok(Err(e)) => last_error = e,
-            Err(_) => last_error = format!("DialI2P per-attempt timeout ({per_attempt:?})"),
-        }
+    loop {
+        let attempt_timeout = per_attempt.min(deadline.saturating_duration_since(Instant::now()));
+        let last_err = match session.dial_timeout(&dest, attempt_timeout) {
+            Ok(conn) => return Ok(conn),
+            Err(e) => e,
+        };
 
         if Instant::now() + retry_interval > deadline {
-            return Err(last_error.into());
+            return Err(last_err);
         }
         thread::sleep(retry_interval);
     }

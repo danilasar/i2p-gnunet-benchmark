@@ -666,3 +666,49 @@ FakeSam ошибочно слал `"REMOTE DESTINATION=clientdest"` вместо
 - `just test-unit` — PASS (16 тестов).
 - `cargo test --workspace --no-run` — PASS (без предупреждений).
 - `just test-transfer` — PASS.
+
+## Дедлайны dial/accept, 2026-06-05
+
+Реализованы таймауты на уровне SAM-рукопожатия для `dial` и `accept`, а также удобный
+`set_timeout` на `SamConn`. Рефакторинг `dial_with_retry` в `sam-bench`.
+
+### Что сделано
+
+- `SamConn::set_timeout(dur)` — устанавливает read и write таймаут в одном вызове.
+- `StreamSession::dial_timeout(dest, timeout)` — открывает соединение с таймаутом;
+  таймаут снимается сразу после `STREAM STATUS RESULT=OK`, данные идут без ограничений.
+- `StreamListener::accept_timeout(timeout)` — ждёт строку с адресом удалённого клиента
+  с таймаутом; таймаут снимается сразу после её получения.
+- Приватные хелперы `connect_stream_timeout` и `accept_stream_timeout` в `session.rs`.
+- `dial_with_retry` в `sam-bench/src/sender.rs` переписан: убраны `thread::spawn`,
+  `mpsc::channel`, прямые вызовы `SamSession::connect_stream`; теперь использует
+  `session.dial_timeout` с `attempt_timeout = min(90s, оставшееся_до_deadline)`.
+
+### Нетривиальные решения
+
+**Таймаут только на read в `accept_stream_timeout`** — `set_write_timeout` не выставляется:
+запись (`STREAM ACCEPT`) быстрая и не блокирует; единственное блокирующее ожидание —
+чтение строки с remote destination. Known limitation: если SAM зависнет при отправке
+`STREAM STATUS OK`, таймаут не сработает.
+
+**Таймаут снимается после рукопожатия** — и в `connect_stream_timeout`, и в
+`accept_stream_timeout` оба таймаута сбрасываются до `None` перед возвратом соединения.
+Это не случайно: фаза данных не должна прерываться по истечении handshake-таймаута.
+
+**FakeSam::spawn_many для двух соединений** — `new_transient_stream_session` открывает
+первое TCP-соединение (HELLO + DEST GENERATE + SESSION CREATE), `dial_timeout` и
+`accept_timeout` открывают второе. Тесты, использующие `SamClient`, требуют двух
+независимых обработчиков в FakeSam.
+
+**`unused_assignments` в `dial_with_retry`** — `last_err` инициализировался пустой
+строкой, а затем немедленно перезаписывался. Исправлено объявлением `let last_err =`
+непосредственно внутри `match`-выражения.
+
+### Проверки
+
+- 5 новых тестов в `sam3/tests/fake_sam.rs` — PASS:
+  `samconn_set_timeout_sets_both_directions`, `dial_timeout_succeeds_within_deadline`,
+  `dial_timeout_returns_error_on_slow_response`, `accept_timeout_succeeds_when_client_connects`,
+  `accept_timeout_returns_error_when_no_client`.
+- `cargo test -p sam3` — 28 тестов, PASS, 0 предупреждений.
+- `cargo build --workspace` — PASS, 0 предупреждений.

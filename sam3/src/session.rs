@@ -7,6 +7,7 @@ use std::{
     time::Duration,
 };
 
+#[derive(Debug)]
 pub struct SamConn {
     inner: TcpStream,
     local: Destination,
@@ -35,6 +36,11 @@ impl SamConn {
     }
 
     pub fn set_write_timeout(&self, dur: Option<Duration>) -> io::Result<()> {
+        self.inner.set_write_timeout(dur)
+    }
+
+    pub fn set_timeout(&self, dur: Option<Duration>) -> io::Result<()> {
+        self.inner.set_read_timeout(dur)?;
         self.inner.set_write_timeout(dur)
     }
 }
@@ -296,6 +302,15 @@ impl StreamSession {
         ))
     }
 
+    pub fn dial_timeout(&self, dest: &str, timeout: Duration) -> Result<SamConn, crate::SamError> {
+        let stream = connect_stream_timeout(&self.sam_addr, &self.id, dest, timeout)?;
+        Ok(SamConn::new(
+            stream,
+            self.destination().clone(),
+            Destination::new(dest),
+        ))
+    }
+
     pub fn listen(&self) -> StreamListener {
         StreamListener {
             sam_addr: self.sam_addr.clone(),
@@ -314,6 +329,10 @@ pub struct StreamListener {
 impl StreamListener {
     pub fn accept(&self) -> Result<SamConn, crate::SamError> {
         SamSession::accept_stream(&self.sam_addr, &self.id, &self.local)
+    }
+
+    pub fn accept_timeout(&self, timeout: Duration) -> Result<SamConn, crate::SamError> {
+        accept_stream_timeout(&self.sam_addr, &self.id, &self.local, timeout)
     }
 
     pub fn id(&self) -> &str {
@@ -383,6 +402,46 @@ impl SamSession {
     pub fn keys(&self) -> &Keys {
         &self.keys
     }
+}
+
+fn connect_stream_timeout(
+    sam_addr: &str,
+    id: &str,
+    dest: &str,
+    timeout: Duration,
+) -> Result<TcpStream, crate::SamError> {
+    let mut stream = TcpStream::connect(sam_addr)?;
+    stream.set_read_timeout(Some(timeout))?;
+    stream.set_write_timeout(Some(timeout))?;
+    hello(&mut stream)?;
+    write!(
+        stream,
+        "STREAM CONNECT ID={id} DESTINATION={dest} FROM_PORT=0 TO_PORT=0 SILENT=false\n"
+    )?;
+    stream.flush()?;
+    let line = read_line(&mut stream)?;
+    ensure_ok(&line)?;
+    stream.set_read_timeout(None)?;
+    stream.set_write_timeout(None)?;
+    Ok(stream)
+}
+
+fn accept_stream_timeout(
+    sam_addr: &str,
+    id: &str,
+    local: &Destination,
+    timeout: Duration,
+) -> Result<SamConn, crate::SamError> {
+    let mut stream = TcpStream::connect(sam_addr)?;
+    hello(&mut stream)?;
+    write!(stream, "STREAM ACCEPT ID={id} SILENT=false\n")?;
+    stream.flush()?;
+    let line = read_line(&mut stream)?;
+    ensure_ok(&line)?;
+    stream.set_read_timeout(Some(timeout))?;
+    let remote = Destination::new(read_line(&mut stream)?);
+    stream.set_read_timeout(None)?;
+    Ok(SamConn::new(stream, local.clone(), remote))
 }
 
 fn generate_keys_on(stream: &mut TcpStream, sig_type: &str) -> Result<Keys, crate::SamError> {

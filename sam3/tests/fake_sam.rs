@@ -37,6 +37,150 @@ fn session_create_returns_duplicated_id() {
 }
 
 #[test]
+fn samconn_set_timeout_sets_both_directions() {
+    let server = FakeSam::spawn(|mut stream| {
+        expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+        writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+        expect_line(&mut stream, "STREAM ACCEPT ID=server SILENT=false");
+        writeln!(stream, "STREAM STATUS RESULT=OK").unwrap();
+        writeln!(stream, "clientdest").unwrap();
+    });
+
+    let local_dest = Destination::new("localdest");
+    let conn = SamSession::accept_stream(&server.addr, "server", &local_dest).unwrap();
+    conn.set_timeout(Some(Duration::from_secs(5))).unwrap();
+    conn.set_read_timeout(None).unwrap();
+    server.join();
+}
+
+#[test]
+fn dial_timeout_succeeds_within_deadline() {
+    let server = FakeSam::spawn_many(vec![
+        Box::new(|mut stream| {
+            expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+            writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+            expect_line(&mut stream, "DEST GENERATE SIGNATURE_TYPE=7");
+            writeln!(stream, "DEST REPLY PUB=pubdest PRIV=privdest").unwrap();
+            let _ = read_line(&mut stream);
+            writeln!(stream, "SESSION STATUS RESULT=OK").unwrap();
+        }),
+        Box::new(|mut stream| {
+            expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+            writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+            expect_line(
+                &mut stream,
+                "STREAM CONNECT ID=client DESTINATION=serverdest FROM_PORT=0 TO_PORT=0 SILENT=false",
+            );
+            writeln!(stream, "STREAM STATUS RESULT=OK").unwrap();
+        }),
+    ]);
+
+    let client = SamClient::connect(&server.addr);
+    let session = client
+        .new_transient_stream_session("client", SAM_TUNNEL_OPTIONS)
+        .expect("create stream session");
+    let conn = session.dial_timeout("serverdest", Duration::from_secs(1)).unwrap();
+    assert_eq!(conn.remote_destination().as_str(), "serverdest");
+    server.join();
+}
+
+#[test]
+fn dial_timeout_returns_error_on_slow_response() {
+    let server = FakeSam::spawn_many(vec![
+        Box::new(|mut stream| {
+            expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+            writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+            expect_line(&mut stream, "DEST GENERATE SIGNATURE_TYPE=7");
+            writeln!(stream, "DEST REPLY PUB=pubdest PRIV=privdest").unwrap();
+            let _ = read_line(&mut stream);
+            writeln!(stream, "SESSION STATUS RESULT=OK").unwrap();
+        }),
+        Box::new(|mut stream| {
+            expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+            writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+            let _ = read_line(&mut stream);
+            thread::sleep(Duration::from_secs(1));
+            writeln!(stream, "STREAM STATUS RESULT=OK").unwrap();
+        }),
+    ]);
+
+    let client = SamClient::connect(&server.addr);
+    let session = client
+        .new_transient_stream_session("client", SAM_TUNNEL_OPTIONS)
+        .expect("create stream session");
+    let err = session.dial_timeout("serverdest", Duration::from_millis(100)).unwrap_err();
+    match err {
+        SamError::Io(_) => (),
+        _ => panic!("expected Io error for timeout, got {:?}", err),
+    }
+    server.join();
+}
+
+#[test]
+fn accept_timeout_succeeds_when_client_connects() {
+    let server = FakeSam::spawn_many(vec![
+        Box::new(|mut stream| {
+            expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+            writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+            expect_line(&mut stream, "DEST GENERATE SIGNATURE_TYPE=7");
+            writeln!(stream, "DEST REPLY PUB=pubdest PRIV=privdest").unwrap();
+            let _ = read_line(&mut stream);
+            writeln!(stream, "SESSION STATUS RESULT=OK").unwrap();
+        }),
+        Box::new(|mut stream| {
+            expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+            writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+            expect_line(&mut stream, "STREAM ACCEPT ID=server SILENT=false");
+            writeln!(stream, "STREAM STATUS RESULT=OK").unwrap();
+            writeln!(stream, "clientdest").unwrap();
+        }),
+    ]);
+
+    let client = SamClient::connect(&server.addr);
+    let session = client
+        .new_transient_stream_session("server", SAM_TUNNEL_OPTIONS)
+        .expect("create stream session");
+    let listener = session.listen();
+    let conn = listener.accept_timeout(Duration::from_secs(1)).unwrap();
+    assert_eq!(conn.remote_destination().as_str(), "clientdest");
+    server.join();
+}
+
+#[test]
+fn accept_timeout_returns_error_when_no_client() {
+    let server = FakeSam::spawn_many(vec![
+        Box::new(|mut stream| {
+            expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+            writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+            expect_line(&mut stream, "DEST GENERATE SIGNATURE_TYPE=7");
+            writeln!(stream, "DEST REPLY PUB=pubdest PRIV=privdest").unwrap();
+            let _ = read_line(&mut stream);
+            writeln!(stream, "SESSION STATUS RESULT=OK").unwrap();
+        }),
+        Box::new(|mut stream| {
+            expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+            writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+            expect_line(&mut stream, "STREAM ACCEPT ID=server SILENT=false");
+            writeln!(stream, "STREAM STATUS RESULT=OK").unwrap();
+            thread::sleep(Duration::from_secs(1));
+            writeln!(stream, "clientdest").unwrap();
+        }),
+    ]);
+
+    let client = SamClient::connect(&server.addr);
+    let session = client
+        .new_transient_stream_session("server", SAM_TUNNEL_OPTIONS)
+        .expect("create stream session");
+    let listener = session.listen();
+    let err = listener.accept_timeout(Duration::from_millis(100)).unwrap_err();
+    match err {
+        SamError::Io(_) => (),
+        _ => panic!("expected Io error for timeout, got {:?}", err),
+    }
+    server.join();
+}
+
+#[test]
 fn lookup_resolves_name_to_destination() {
     let server = FakeSam::spawn(|mut stream| {
         expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");

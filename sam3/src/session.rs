@@ -1,6 +1,5 @@
 use std::{
     collections::HashMap,
-    error::Error,
     fmt, fs,
     io::{self, Read, Write},
     net::TcpStream,
@@ -161,7 +160,7 @@ impl Keys {
         &self.private
     }
 
-    pub fn write_keyfile(&self, path: impl AsRef<Path>) -> Result<(), Box<dyn Error>> {
+    pub fn write_keyfile(&self, path: impl AsRef<Path>) -> Result<(), crate::SamError> {
         fs::write(
             path,
             format!("PUB={}\nPRIV={}\n", self.destination(), self.private_key()),
@@ -169,7 +168,7 @@ impl Keys {
         Ok(())
     }
 
-    pub fn read_keyfile(path: impl AsRef<Path>) -> Result<Self, Box<dyn Error>> {
+    pub fn read_keyfile(path: impl AsRef<Path>) -> Result<Self, crate::SamError> {
         let contents = fs::read_to_string(path)?;
         if let Some(keys) = parse_keyfile(&contents) {
             return Ok(keys);
@@ -183,6 +182,7 @@ impl Keys {
     }
 }
 
+#[derive(Debug)]
 pub struct SamSession {
     _control: TcpStream,
     keys: Keys,
@@ -205,7 +205,7 @@ impl SamClient {
         id: impl Into<String>,
         keys: &Keys,
         options: &[(&str, &str)],
-    ) -> Result<StreamSession, Box<dyn Error>> {
+    ) -> Result<StreamSession, crate::SamError> {
         let id = id.into();
         let session = SamSession::create_stream_with_keys(&self.sam_addr, &id, keys, options)?;
         Ok(StreamSession {
@@ -219,7 +219,7 @@ impl SamClient {
         &self,
         id: impl Into<String>,
         options: &[(&str, &str)],
-    ) -> Result<StreamSession, Box<dyn Error>> {
+    ) -> Result<StreamSession, crate::SamError> {
         let id = id.into();
         let session = SamSession::create_stream(&self.sam_addr, &id, options)?;
         Ok(StreamSession {
@@ -229,17 +229,17 @@ impl SamClient {
         })
     }
 
-    pub fn new_keys(&self) -> Result<Keys, Box<dyn Error>> {
+    pub fn new_keys(&self) -> Result<Keys, crate::SamError> {
         self.new_keys_with_signature_type(DEFAULT_SIGNATURE_TYPE)
     }
 
-    pub fn new_keys_with_signature_type(&self, sig_type: &str) -> Result<Keys, Box<dyn Error>> {
+    pub fn new_keys_with_signature_type(&self, sig_type: &str) -> Result<Keys, crate::SamError> {
         let mut stream = TcpStream::connect(&self.sam_addr)?;
         hello(&mut stream)?;
         generate_keys_on(&mut stream, sig_type)
     }
 
-    pub fn ensure_keyfile(&self, path: impl AsRef<Path>) -> Result<Keys, Box<dyn Error>> {
+    pub fn ensure_keyfile(&self, path: impl AsRef<Path>) -> Result<Keys, crate::SamError> {
         let path = path.as_ref();
         if path.exists() {
             Keys::read_keyfile(path)
@@ -251,6 +251,7 @@ impl SamClient {
     }
 }
 
+#[derive(Debug)]
 pub struct StreamSession {
     sam_addr: String,
     id: String,
@@ -274,7 +275,7 @@ impl StreamSession {
         self.session.keys()
     }
 
-    pub fn dial(&self, dest: &str) -> Result<SamConn, Box<dyn Error>> {
+    pub fn dial(&self, dest: &str) -> Result<SamConn, crate::SamError> {
         let stream = SamSession::connect_stream(&self.sam_addr, &self.id, dest)?;
         Ok(SamConn::new(
             stream,
@@ -299,7 +300,7 @@ pub struct StreamListener {
 }
 
 impl StreamListener {
-    pub fn accept(&self) -> Result<SamConn, Box<dyn Error>> {
+    pub fn accept(&self) -> Result<SamConn, crate::SamError> {
         SamSession::accept_stream(&self.sam_addr, &self.id, &self.local)
     }
 
@@ -313,7 +314,7 @@ impl SamSession {
         sam_addr: &str,
         id: &str,
         options: &[(&str, &str)],
-    ) -> Result<Self, Box<dyn Error>> {
+    ) -> Result<Self, crate::SamError> {
         let mut stream = TcpStream::connect(sam_addr)?;
         hello(&mut stream)?;
         let keys = generate_keys_on(&mut stream, DEFAULT_SIGNATURE_TYPE)?;
@@ -325,7 +326,7 @@ impl SamSession {
         id: &str,
         keys: &Keys,
         options: &[(&str, &str)],
-    ) -> Result<Self, Box<dyn Error>> {
+    ) -> Result<Self, crate::SamError> {
         let mut stream = TcpStream::connect(sam_addr)?;
         hello(&mut stream)?;
         create_stream_on(stream, id, keys, options)
@@ -335,7 +336,7 @@ impl SamSession {
         sam_addr: &str,
         id: &str,
         dest: &str,
-    ) -> Result<TcpStream, Box<dyn Error>> {
+    ) -> Result<TcpStream, crate::SamError> {
         let mut stream = TcpStream::connect(sam_addr)?;
         hello(&mut stream)?;
         write!(
@@ -344,7 +345,7 @@ impl SamSession {
         )?;
         stream.flush()?;
         let line = read_line(&mut stream)?;
-        ensure_ok(&line, "STREAM CONNECT")?;
+        ensure_ok(&line)?;
         Ok(stream)
     }
 
@@ -352,13 +353,13 @@ impl SamSession {
         sam_addr: &str,
         id: &str,
         local: &Destination,
-    ) -> Result<SamConn, Box<dyn Error>> {
+    ) -> Result<SamConn, crate::SamError> {
         let mut stream = TcpStream::connect(sam_addr)?;
         hello(&mut stream)?;
         write!(stream, "STREAM ACCEPT ID={id} SILENT=false\n")?;
         stream.flush()?;
         let line = read_line(&mut stream)?;
-        ensure_ok(&line, "STREAM ACCEPT")?;
+        ensure_ok(&line)?;
         let remote = Destination::new(read_line(&mut stream)?);
         Ok(SamConn::new(stream, local.clone(), remote))
     }
@@ -372,21 +373,21 @@ impl SamSession {
     }
 }
 
-fn generate_keys_on(stream: &mut TcpStream, sig_type: &str) -> Result<Keys, Box<dyn Error>> {
+fn generate_keys_on(stream: &mut TcpStream, sig_type: &str) -> Result<Keys, crate::SamError> {
     write!(stream, "DEST GENERATE SIGNATURE_TYPE={sig_type}\n")?;
     stream.flush()?;
     let line = read_line(stream)?;
     let fields = parse_fields(&line);
     if fields.get("RESULT").is_some_and(|v| v != "OK") {
-        return Err(format!("DEST GENERATE failed: {line}").into());
+        return Err(crate::SamError::from_result_line(&line));
     }
     let pub_dest = fields
         .get("PUB")
-        .ok_or_else(|| format!("DEST GENERATE without PUB: {line}"))?
+        .ok_or_else(|| crate::SamError::UnexpectedResponse(format!("DEST GENERATE without PUB: {line}")))?
         .to_string();
     let priv_dest = fields
         .get("PRIV")
-        .ok_or_else(|| format!("DEST GENERATE without PRIV: {line}"))?
+        .ok_or_else(|| crate::SamError::UnexpectedResponse(format!("DEST GENERATE without PRIV: {line}")))?
         .to_string();
     Ok(Keys::new(pub_dest, priv_dest))
 }
@@ -396,7 +397,7 @@ fn create_stream_on(
     id: &str,
     keys: &Keys,
     options: &[(&str, &str)],
-) -> Result<SamSession, Box<dyn Error>> {
+) -> Result<SamSession, crate::SamError> {
     write!(
         stream,
         "SESSION CREATE STYLE=STREAM ID={id} DESTINATION={} ",
@@ -408,7 +409,7 @@ fn create_stream_on(
     write!(stream, "SIGNATURE_TYPE={DEFAULT_SIGNATURE_TYPE}\n")?;
     stream.flush()?;
     let line = read_line(&mut stream)?;
-    ensure_ok(&line, "SESSION CREATE")?;
+    ensure_ok(&line)?;
 
     Ok(SamSession {
         _control: stream,
@@ -429,25 +430,26 @@ fn parse_keyfile(contents: &str) -> Option<Keys> {
     Some(Keys::new(public?, private?))
 }
 
-fn hello(stream: &mut TcpStream) -> Result<(), Box<dyn Error>> {
+fn hello(stream: &mut TcpStream) -> Result<(), crate::SamError> {
     stream.write_all(b"HELLO VERSION MIN=3.0 MAX=3.3\n")?;
     stream.flush()?;
     let line = read_line(stream)?;
     if !line.contains("HELLO REPLY") || !line.contains("RESULT=OK") {
-        return Err(format!("HELLO failed: {line}").into());
+        return Err(crate::SamError::from_result_line(&line));
     }
     Ok(())
 }
 
-fn ensure_ok(line: &str, command: &str) -> Result<(), Box<dyn Error>> {
-    if line.contains("RESULT=OK") {
+pub(crate) fn ensure_ok(line: &str) -> Result<(), crate::SamError> {
+    let fields = parse_fields(line);
+    if fields.get("RESULT").is_some_and(|v| v == "OK") {
         Ok(())
     } else {
-        Err(format!("{command} failed: {line}").into())
+        Err(crate::SamError::from_result_line(line))
     }
 }
 
-fn read_line(stream: &mut TcpStream) -> Result<String, Box<dyn Error>> {
+fn read_line(stream: &mut TcpStream) -> Result<String, crate::SamError> {
     let mut buf = Vec::new();
     let mut byte = [0u8; 1];
     loop {
@@ -457,10 +459,10 @@ fn read_line(stream: &mut TcpStream) -> Result<String, Box<dyn Error>> {
             break;
         }
     }
-    Ok(String::from_utf8(buf)?.trim_end().to_string())
+    Ok(String::from_utf8(buf).map_err(|e| crate::SamError::UnexpectedResponse(e.to_string()))?.trim_end().to_string())
 }
 
-fn parse_fields(line: &str) -> HashMap<String, String> {
+pub(crate) fn parse_fields(line: &str) -> HashMap<String, String> {
     let mut fields = HashMap::new();
     let mut parts = line.split_whitespace().peekable();
 
@@ -560,10 +562,10 @@ mod tests {
 
     #[test]
     fn ensure_ok_rejects_non_ok_results() {
-        let err = ensure_ok("STREAM STATUS RESULT=CANT_REACH_PEER", "STREAM CONNECT")
+        let err = ensure_ok("STREAM STATUS RESULT=CANT_REACH_PEER")
             .expect_err("non-OK result must fail");
 
-        assert!(err.to_string().contains("STREAM CONNECT failed"));
+        assert_eq!(err, crate::SamError::CantReachPeer);
     }
 
     #[test]

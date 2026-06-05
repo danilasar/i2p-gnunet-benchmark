@@ -1187,3 +1187,58 @@ RAW-получатель не знает адрес отправителя и н
   `session_create_uses_options_from_session_options` (позитив + негатив).
 - `cargo test -p sam3` — 29 тестов, PASS, 0 предупреждений.
 - `cargo build --workspace` — PASS, 0 предупреждений.
+
+---
+
+## 2026-06-05 — Feature 11: proto/ — чистый протокольный слой
+
+### Цель
+
+Первый шаг большого рефакторинга по аналогии с yosemite: выделить чистый
+протокольный слой `src/proto/` без I/O, который будет использоваться и
+синхронным, и будущим асинхронным (tokio) слоями.
+
+### Реализовано
+
+**`src/error.rs`** — добавлен вариант `Poisoned(String)`:
+- Машина состояний помещает контроллер в это состояние при недопустимом переходе;
+  все последующие вызовы на отравленном контроллере возвращают `Poisoned`-ошибку.
+- `from_result_line` переключён с `crate::session::parse_fields` на
+  `crate::proto::response::parse_fields` — устранена зависимость error.rs от
+  будущего-к-удалению session.rs.
+
+**`src/proto/command.rs`** — 19 чистых функций-строителей SAM-команд:
+- `hello`, `dest_generate`, `session_create_{stream,datagram,raw,primary}`,
+  `session_add_{stream,datagram,raw}`, `session_remove`,
+  `stream_connect`, `stream_accept`, `stream_forward`,
+  `naming_lookup`, `ping`, `datagram_header`, `raw_header`.
+- Новые возможности SAM 3.3 сразу заложены в сигнатуры:
+  `FROM_PORT`/`TO_PORT` в `stream_connect`, `PROTOCOL`/`HEADER` в
+  `session_create_raw`, `HOST` в `stream_forward`, `SESSION REMOVE`.
+- Параметры со значением по умолчанию (порт=0, header=false) не включаются
+  в команду — экономим трафик и упрощаем тесты.
+- 21 unit-тест.
+
+**`src/proto/response.rs`** — парсеры SAM-ответов (перенесены из session.rs
+и расширены):
+- `parse_fields` — перенесён без изменения логики, теперь публичный.
+- `check_result` (бывший `ensure_ok`), `parse_hello`, `parse_dest_reply`,
+  `parse_session_status`, `parse_naming_reply`, `parse_stream_status`,
+  `parse_stream_peer`, `parse_pong`.
+- 23 unit-теста.
+
+**`src/proto/state.rs`** — машина состояний:
+- `SessionController`: `Fresh → HelloPending → HelloDone → CreatePending →
+  Active(dest) | Poisoned(msg)`. Поддерживает SESSION ADD и SESSION REMOVE
+  из состояния Active.
+- `StreamOpController`: `Fresh → HelloPending → HelloDone → OpPending(op) →
+  Done | Poisoned(msg)`. Используется для каждой отдельной STREAM-операции
+  на новом TCP-соединении.
+- Любой недопустимый переход → `Poisoned`, все последующие вызовы → ошибка.
+- 14 unit-тестов.
+
+### Проверки
+
+- `cargo test --lib` — 92 теста, PASS, 0 предупреждений.
+  (58 новых в proto/, 34 унаследованных из session.rs и error.rs)
+- `cargo build -p sam3` — PASS.

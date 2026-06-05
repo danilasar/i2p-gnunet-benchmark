@@ -16,11 +16,12 @@ pub enum SamError {
     I2PError(String),
     UnexpectedResponse(String),
     Io(String),
+    Poisoned(String),
 }
 
 impl SamError {
     pub(crate) fn from_result_line(line: &str) -> Self {
-        let fields = crate::session::parse_fields(line);
+        let fields = crate::proto::response::parse_fields(line);
         let Some(result) = fields.get("RESULT") else {
             return SamError::UnexpectedResponse(line.to_string());
         };
@@ -57,6 +58,7 @@ impl fmt::Display for SamError {
             SamError::I2PError(msg) => write!(f, "I2P_ERROR: {msg}"),
             SamError::UnexpectedResponse(line) => write!(f, "unexpected SAM response: {line}"),
             SamError::Io(msg) => write!(f, "IO error: {msg}"),
+            SamError::Poisoned(msg) => write!(f, "session poisoned: {msg}"),
         }
     }
 }

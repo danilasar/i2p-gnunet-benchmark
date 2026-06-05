@@ -483,6 +483,142 @@ fn test_go_raw_sender_rust_receiver() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
+fn test_rust_primary_sender_go_receiver() -> Result<(), Box<dyn Error>> {
+    let (tp, _nodes, _tmp) = setup_two_sam_nodes()?;
+    let msg = "hello primary from rust";
+
+    // 1. Start Go primary-server in node1
+    let mut go_proc = Command::new("ip")
+        .args([
+            "netns",
+            "exec",
+            &tp.nodes[1].ns,
+            "go-sam3-peer",
+            "--role",
+            "primary-server",
+            "--sam",
+            "127.0.0.1:7656",
+            "--id",
+            "go-prim-server",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()?;
+
+    let mut go_stdout = BufReader::new(go_proc.stdout.take().unwrap());
+    let mut ready_line = String::new();
+    go_stdout.read_line(&mut ready_line)?;
+    let ready: GoReadyMsg = serde_json::from_str(&ready_line)?;
+    let go_dest = ready.dest;
+
+    // 2. Start Rust primary-sender in node2
+    let rust_out = Command::new("ip")
+        .args([
+            "netns",
+            "exec",
+            &tp.nodes[2].ns,
+            "sam-compat",
+            "--role",
+            "primary-sender",
+            "--sam",
+            "127.0.0.1:7656",
+            "--id",
+            "rust-prim-sender",
+            "--dest",
+            &go_dest,
+            "--msg",
+            msg,
+        ])
+        .output()?;
+
+    let rust_result: GoResultMsg = serde_json::from_slice(&rust_out.stdout)?;
+    assert!(
+        rust_result.success,
+        "Rust primary sender failed: {}",
+        rust_result.error
+    );
+
+    // 3. Check Go result
+    let mut result_line = String::new();
+    go_stdout.read_line(&mut result_line)?;
+    let result: GoResultMsg = serde_json::from_str(&result_line)?;
+    assert!(result.success, "Go primary server failed: {}", result.error);
+
+    go_proc.wait()?;
+    Ok(())
+}
+
+#[test]
+fn test_go_primary_sender_rust_receiver() -> Result<(), Box<dyn Error>> {
+    let (tp, _nodes, _tmp) = setup_two_sam_nodes()?;
+    let msg = "hello primary from go";
+
+    // 1. Start Rust primary-receiver in node1
+    let mut rust_proc = Command::new("ip")
+        .args([
+            "netns",
+            "exec",
+            &tp.nodes[1].ns,
+            "sam-compat",
+            "--role",
+            "primary-receiver",
+            "--sam",
+            "127.0.0.1:7656",
+            "--id",
+            "rust-prim-receiver",
+            "--msg",
+            msg,
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()?;
+
+    let mut rust_stdout = BufReader::new(rust_proc.stdout.take().unwrap());
+    let mut ready_line = String::new();
+    rust_stdout.read_line(&mut ready_line)?;
+    let ready: GoReadyMsg = serde_json::from_str(&ready_line)?;
+    let rust_dest = ready.dest;
+
+    // 2. Start Go primary-client in node2
+    let go_out = Command::new("ip")
+        .args([
+            "netns",
+            "exec",
+            &tp.nodes[2].ns,
+            "go-sam3-peer",
+            "--role",
+            "primary-client",
+            "--sam",
+            "127.0.0.1:7656",
+            "--id",
+            "go-prim-client",
+            "--dest",
+            &rust_dest,
+            "--msg",
+            msg,
+        ])
+        .output()?;
+
+    let lines: Vec<_> = go_out
+        .stdout
+        .split(|&b| b == b'\n')
+        .filter(|l| !l.is_empty())
+        .collect();
+    let result: GoResultMsg =
+        serde_json::from_slice(lines.last().ok_or("no output from go-sam3-peer")?)?;
+    assert!(result.success, "Go primary client failed: {}", result.error);
+
+    // 3. Check Rust result
+    let mut result_line = String::new();
+    rust_stdout.read_line(&mut result_line)?;
+    let result: GoResultMsg = serde_json::from_str(&result_line)?;
+    assert!(result.success, "Rust primary receiver failed: {}", result.error);
+
+    rust_proc.wait()?;
+    Ok(())
+}
+
+#[test]
 fn test_lookup_against_go_destination() -> Result<(), Box<dyn Error>> {
     let (tp, _nodes, _tmp) = setup_two_sam_nodes()?;
 

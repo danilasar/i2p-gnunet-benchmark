@@ -858,6 +858,101 @@ result только после EOF» Rust-тест, читающий result до
 - `cargo check --workspace` — PASS.
 - `go build ./go-compat` — PASS.
 
+## PrimarySession, 2026-06-05
+
+Реализован тип `PrimarySession` (`SESSION CREATE STYLE=PRIMARY`) и `StreamSubSession`.
+PrimarySession — контейнер для нескольких sub-сессий разных типов с общей I2P-идентичностью.
+
+### Концепция
+
+Обычные сессии создаются командой `SESSION CREATE` с новым TCP-соединением.
+Sub-сессии создаются командой `SESSION ADD` на уже существующем control-соединении primary,
+без повторного `HELLO` и без указания `DESTINATION`.
+
+```
+SESSION CREATE STYLE=PRIMARY ID=main DESTINATION=<priv> <options>
+SESSION ADD STYLE=STREAM ID=main-stream
+SESSION ADD STYLE=DATAGRAM ID=main-dg PORT=<port>
+SESSION ADD STYLE=RAW ID=main-raw PORT=<port>
+```
+
+### Что сделано
+
+**Структуры в `sam3/src/session.rs`:**
+- `PrimarySession` — владеет `Arc<Mutex<TcpStream>>` (control-соединение),
+  `sam_addr`, `id`, `keys`.
+- `StreamSubSession` — держит `Arc<Mutex<TcpStream>>` для удержания primary живым,
+  `sam_addr`, `id`, `destination`. Методы `dial`, `dial_timeout`, `listen` —
+  открывают отдельные TCP-соединения для данных (стандартный `STREAM CONNECT/ACCEPT`).
+
+**Методы `PrimarySession`:**
+- `new_stream_sub_session(&mut self, id)` — отправляет `SESSION ADD STYLE=STREAM ID=…`,
+  возвращает `StreamSubSession`.
+- `new_datagram_sub_session(&mut self, id, options)` — `SESSION ADD STYLE=DATAGRAM ID=…
+  PORT=…`, возвращает `DatagramSession`. UDP-сокет создаётся до команды.
+- `new_raw_sub_session(&mut self, id, options)` — аналогично, возвращает `RawSession`.
+
+**Решение проблемы владения `TcpStream`:**
+- `DatagramSession` и `RawSession` требуют `_control: TcpStream` (не `Arc`).
+- Решение: `stream.try_clone()` — создаёт клон файлового дескриптора. И primary, и
+  sub-session держат по FD на одно TCP-соединение. Сессия закрывается только когда
+  оба закрыты.
+- `StreamSubSession` держит `Arc::clone(&self.control)` — не клонирует FD, разделяет
+  указатель.
+
+**Фабричные методы в `SamClient`:**
+- `new_primary_session(id, keys, options)`
+- `new_transient_primary_session(id, options)` — два TCP-соединения к SAM:
+  `DEST GENERATE` + `SESSION CREATE STYLE=PRIMARY`.
+
+**Unit-тесты (5 штук в `#[cfg(test)] mod tests`):**
+- Корректность `SESSION CREATE STYLE=PRIMARY ID=… DESTINATION=…`.
+- `SESSION ADD STYLE=STREAM ID=…`.
+- `SESSION ADD STYLE=DATAGRAM ID=… PORT=…`.
+- `SESSION ADD STYLE=RAW ID=… PORT=…`.
+- `StreamSubSession::dial()` открывает отдельное TCP-соединение и проходит `STREAM CONNECT`.
+
+**Тесты совместимости:**
+- Go-роли `primary-server` и `primary-client` в `go-compat/main.go` используют
+  `sam.NewPrimarySession` + `primary.NewStreamSubSession`, затем переиспользуют
+  `runServer`/`runClient`.
+- Rust-роли `primary-sender` и `primary-receiver` в `sam-compat`; добавлена
+  `dial_sub_with_retry` — аналог `dial_with_retry` для `StreamSubSession`.
+- Два теста в `testbed/tests/sam3_compat.rs`:
+  `test_rust_primary_sender_go_receiver`, `test_go_primary_sender_rust_receiver`.
+
+### Нетривиальные решения
+
+**`Arc<Mutex<TcpStream>>` + `try_clone()`** — сохранён публичный API существующих
+структур (`DatagramSession`, `RawSession`), которые ожидают `_control: TcpStream`.
+Вместо глобального рефакторинга использован `try_clone()` — дешёвое дублирование
+файлового дескриптора на уровне ОС. Семантика корректна: сессия живёт пока существует
+хотя бы один держатель.
+
+**`&mut self` для методов создания sub-сессий** — предотвращает параллельное создание
+sub-сессий (Rust запрещает несколько `&mut`) без явного `Mutex` на уровне API.
+`MutexGuard` используется только внутри метода и освобождается до возврата.
+
+**Перезапись файла при каскадных синтаксических ошибках** — при попытке внести несколько
+крупных блоков в `session.rs` инструментами точечной замены сломалась вложенность
+модулей. Восстановление через полную перезапись файла (`write_file`) оказалось быстрее,
+чем попытки исправить скобки патчами.
+
+### Замечания по ревью (устранено)
+
+Оба замечания ревью устранены до коммита:
+- Убран параметр `options` из `new_datagram_sub_session` и `new_raw_sub_session`
+  (SAM `SESSION ADD` не принимает tunnel-опции; они задаются один раз в primary).
+- Убран `#[derive(Clone)]` у `PrimarySession` (клонирование разделяло бы control-поток
+  между двумя значениями, что неожиданно для пользователя).
+
+### Проверки
+
+- `cargo test -p sam3 primary_` — 5 тестов, PASS.
+- `cargo check --workspace` — PASS, 0 предупреждений.
+- `go build ./go-compat` — PASS.
+- `cargo build -p sam-compat` — PASS.
+
 ## RawSession, 2026-06-05
 
 Реализован тип `RawSession` в библиотеке `sam3` — минималистичный UDP-транспорт

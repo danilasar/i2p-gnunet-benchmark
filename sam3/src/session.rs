@@ -4,6 +4,7 @@ use std::{
     io::{self, Read, Write},
     net::{SocketAddr, TcpStream, UdpSocket},
     path::Path,
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -425,6 +426,182 @@ impl SamClient {
         hello(&mut stream)?;
         lookup_on(&mut stream, name)
     }
+
+    pub fn new_primary_session(
+        &self,
+        id: impl Into<String>,
+        keys: &Keys,
+        options: &SessionOptions,
+    ) -> Result<PrimarySession, crate::SamError> {
+        let id = id.into();
+        let mut stream = TcpStream::connect(&self.sam_addr)?;
+        hello(&mut stream)?;
+        create_primary_on(&mut stream, &id, keys, options)?;
+
+        Ok(PrimarySession {
+            control: Arc::new(Mutex::new(stream)),
+            sam_addr: self.sam_addr.clone(),
+            id,
+            keys: keys.clone(),
+        })
+    }
+
+    pub fn new_transient_primary_session(
+        &self,
+        id: impl Into<String>,
+        options: &SessionOptions,
+    ) -> Result<PrimarySession, crate::SamError> {
+        let mut stream = TcpStream::connect(&self.sam_addr)?;
+        hello(&mut stream)?;
+        let keys = generate_keys_on(&mut stream, DEFAULT_SIGNATURE_TYPE)?;
+        self.new_primary_session(id, &keys, options)
+    }
+}
+
+#[derive(Debug)]
+pub struct PrimarySession {
+    control: Arc<Mutex<TcpStream>>,
+    sam_addr: String,
+    id: String,
+    keys: Keys,
+}
+
+impl PrimarySession {
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub fn local_destination(&self) -> &Destination {
+        self.keys.destination()
+    }
+
+    pub fn keys(&self) -> &Keys {
+        &self.keys
+    }
+
+    pub fn new_stream_sub_session(
+        &mut self,
+        id: impl Into<String>,
+    ) -> Result<StreamSubSession, crate::SamError> {
+        let id = id.into();
+        let mut stream = self.control.lock().unwrap();
+        write!(stream, "SESSION ADD STYLE=STREAM ID={id}\n")?;
+        stream.flush()?;
+        let line = read_line(&mut stream)?;
+        ensure_ok(&line)?;
+
+        Ok(StreamSubSession {
+            _primary: Arc::clone(&self.control),
+            sam_addr: self.sam_addr.clone(),
+            id,
+            destination: self.keys.destination().clone(),
+        })
+    }
+
+    pub fn new_datagram_sub_session(
+        &mut self,
+        id: impl Into<String>,
+    ) -> Result<DatagramSession, crate::SamError> {
+        let id = id.into();
+        let mut sam_udp_addr: SocketAddr = self.sam_addr.parse().map_err(|_| {
+            crate::SamError::UnexpectedResponse(format!("Invalid SAM address: {}", self.sam_addr))
+        })?;
+        sam_udp_addr.set_port(7655);
+        let socket = UdpSocket::bind(SocketAddr::new(sam_udp_addr.ip(), 0))?;
+        let local_port = socket.local_addr()?.port();
+
+        let mut stream = self.control.lock().unwrap();
+        write!(
+            stream,
+            "SESSION ADD STYLE=DATAGRAM ID={id} PORT={local_port}\n"
+        )?;
+        stream.flush()?;
+        let line = read_line(&mut stream)?;
+        ensure_ok(&line)?;
+
+        Ok(DatagramSession {
+            _control: stream.try_clone()?,
+            socket,
+            sam_udp_addr,
+            id,
+            keys: self.keys.clone(),
+        })
+    }
+
+    pub fn new_raw_sub_session(
+        &mut self,
+        id: impl Into<String>,
+    ) -> Result<RawSession, crate::SamError> {
+        let id = id.into();
+        let mut sam_udp_addr: SocketAddr = self.sam_addr.parse().map_err(|_| {
+            crate::SamError::UnexpectedResponse(format!("Invalid SAM address: {}", self.sam_addr))
+        })?;
+        sam_udp_addr.set_port(7655);
+        let socket = UdpSocket::bind(SocketAddr::new(sam_udp_addr.ip(), 0))?;
+        let local_port = socket.local_addr()?.port();
+
+        let mut stream = self.control.lock().unwrap();
+        write!(stream, "SESSION ADD STYLE=RAW ID={id} PORT={local_port}\n")?;
+        stream.flush()?;
+        let line = read_line(&mut stream)?;
+        ensure_ok(&line)?;
+
+        Ok(RawSession {
+            _control: stream.try_clone()?,
+            socket,
+            sam_udp_addr,
+            id,
+            keys: self.keys.clone(),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct StreamSubSession {
+    _primary: Arc<Mutex<TcpStream>>,
+    sam_addr: String,
+    id: String,
+    destination: Destination,
+}
+
+impl StreamSubSession {
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub fn sam_addr(&self) -> &str {
+        &self.sam_addr
+    }
+
+    pub fn destination(&self) -> &Destination {
+        &self.destination
+    }
+
+    pub fn listen(&self) -> StreamListener {
+        StreamListener {
+            sam_addr: self.sam_addr.clone(),
+            id: self.id.clone(),
+            local: self.destination.clone(),
+        }
+    }
+
+    pub fn dial(&self, dest: &str) -> Result<SamConn, crate::SamError> {
+        let stream = SamSession::connect_stream(&self.sam_addr, &self.id, dest)?;
+        Ok(SamConn::new(
+            stream,
+            self.destination().clone(),
+            Destination::new(dest),
+        ))
+    }
+
+    pub fn dial_timeout(&self, dest: &str, timeout: Duration) -> Result<SamConn, crate::SamError> {
+        let stream = connect_stream_timeout(&self.sam_addr, &self.id, dest, timeout)?;
+        Ok(SamConn::new(
+            stream,
+            self.destination().clone(),
+            Destination::new(dest),
+        ))
+    }
 }
 
 #[derive(Debug)]
@@ -830,6 +1007,27 @@ fn create_raw_on(
     write!(
         stream,
         "SESSION CREATE STYLE=RAW ID={id} DESTINATION={} PORT={local_port} ",
+        keys.private_key()
+    )?;
+    for (key, value) in options.to_pairs() {
+        write!(stream, "{key}={value} ")?;
+    }
+    write!(stream, "SIGNATURE_TYPE={DEFAULT_SIGNATURE_TYPE}\n")?;
+    stream.flush()?;
+    let line = read_line(stream)?;
+    ensure_ok(&line)?;
+    Ok(())
+}
+
+fn create_primary_on(
+    stream: &mut TcpStream,
+    id: &str,
+    keys: &Keys,
+    options: &SessionOptions,
+) -> Result<(), crate::SamError> {
+    write!(
+        stream,
+        "SESSION CREATE STYLE=PRIMARY ID={id} DESTINATION={} ",
         keys.private_key()
     )?;
     for (key, value) in options.to_pairs() {
@@ -1435,6 +1633,156 @@ mod tests {
         let mut buf = [0u8; 1024];
         let n = session.read(&mut buf).unwrap();
         assert_eq!(&buf[..n], b"correct data");
+        server.join();
+    }
+
+    #[test]
+    fn primary_session_create_sends_correct_sam_command() {
+        let server = FakeSam::spawn_many(vec![
+            Box::new(|mut stream| {
+                expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+                writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+                expect_line(&mut stream, "DEST GENERATE SIGNATURE_TYPE=7");
+                writeln!(stream, "DEST REPLY PUB=pubdest PRIV=privdest").unwrap();
+            }),
+            Box::new(|mut stream| {
+                expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+                writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+                let create = read_line(&mut stream);
+                assert!(create
+                    .starts_with("SESSION CREATE STYLE=PRIMARY ID=prim_test DESTINATION=privdest "));
+                writeln!(stream, "SESSION STATUS RESULT=OK").unwrap();
+            }),
+        ]);
+
+        let client = SamClient::connect(&server.addr);
+        let _ = client
+            .new_transient_primary_session("prim_test", &SessionOptions::zero_hop())
+            .unwrap();
+        server.join();
+    }
+
+    #[test]
+    fn primary_stream_sub_session_sends_session_add() {
+        let server = FakeSam::spawn_many(vec![
+            Box::new(|mut stream| {
+                expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+                writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+                expect_line(&mut stream, "DEST GENERATE SIGNATURE_TYPE=7");
+                writeln!(stream, "DEST REPLY PUB=pubdest PRIV=privdest").unwrap();
+            }),
+            Box::new(|mut stream| {
+                expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+                writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+                let _ = read_line(&mut stream);
+                writeln!(stream, "SESSION STATUS RESULT=OK").unwrap();
+                expect_line(&mut stream, "SESSION ADD STYLE=STREAM ID=sub_stream");
+                writeln!(stream, "SESSION STATUS RESULT=OK").unwrap();
+            }),
+        ]);
+
+        let client = SamClient::connect(&server.addr);
+        let mut primary = client
+            .new_transient_primary_session("prim_test", &SessionOptions::zero_hop())
+            .unwrap();
+        let _ = primary.new_stream_sub_session("sub_stream").unwrap();
+        server.join();
+    }
+
+    #[test]
+    fn primary_datagram_sub_session_sends_session_add() {
+        let server = FakeSam::spawn_many(vec![
+            Box::new(|mut stream| {
+                expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+                writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+                expect_line(&mut stream, "DEST GENERATE SIGNATURE_TYPE=7");
+                writeln!(stream, "DEST REPLY PUB=pubdest PRIV=privdest").unwrap();
+            }),
+            Box::new(|mut stream| {
+                expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+                writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+                let _ = read_line(&mut stream);
+                writeln!(stream, "SESSION STATUS RESULT=OK").unwrap();
+                let add = read_line(&mut stream);
+                assert!(add.starts_with("SESSION ADD STYLE=DATAGRAM ID=sub_dg PORT="));
+                writeln!(stream, "SESSION STATUS RESULT=OK").unwrap();
+            }),
+        ]);
+
+        let client = SamClient::connect(&server.addr);
+        let mut primary = client
+            .new_transient_primary_session("prim_test", &SessionOptions::zero_hop())
+            .unwrap();
+        let _ = primary
+            .new_datagram_sub_session("sub_dg")
+            .unwrap();
+        server.join();
+    }
+
+    #[test]
+    fn primary_raw_sub_session_sends_session_add() {
+        let server = FakeSam::spawn_many(vec![
+            Box::new(|mut stream| {
+                expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+                writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+                expect_line(&mut stream, "DEST GENERATE SIGNATURE_TYPE=7");
+                writeln!(stream, "DEST REPLY PUB=pubdest PRIV=privdest").unwrap();
+            }),
+            Box::new(|mut stream| {
+                expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+                writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+                let _ = read_line(&mut stream);
+                writeln!(stream, "SESSION STATUS RESULT=OK").unwrap();
+                let add = read_line(&mut stream);
+                assert!(add.starts_with("SESSION ADD STYLE=RAW ID=sub_raw PORT="));
+                writeln!(stream, "SESSION STATUS RESULT=OK").unwrap();
+            }),
+        ]);
+
+        let client = SamClient::connect(&server.addr);
+        let mut primary = client
+            .new_transient_primary_session("prim_test", &SessionOptions::zero_hop())
+            .unwrap();
+        let _ = primary
+            .new_raw_sub_session("sub_raw")
+            .unwrap();
+        server.join();
+    }
+
+    #[test]
+    fn primary_stream_sub_session_can_connect() {
+        let server = FakeSam::spawn_many(vec![
+            Box::new(|mut stream| {
+                expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+                writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+                expect_line(&mut stream, "DEST GENERATE SIGNATURE_TYPE=7");
+                writeln!(stream, "DEST REPLY PUB=pubdest PRIV=privdest").unwrap();
+            }),
+            Box::new(|mut stream| {
+                expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+                writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+                let _ = read_line(&mut stream);
+                writeln!(stream, "SESSION STATUS RESULT=OK").unwrap();
+                let _ = read_line(&mut stream);
+                writeln!(stream, "SESSION STATUS RESULT=OK").unwrap();
+            }),
+            Box::new(|mut stream| {
+                expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+                writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+                expect_line(
+                    &mut stream,
+                    "STREAM CONNECT ID=sub_stream DESTINATION=target_dest FROM_PORT=0 TO_PORT=0 SILENT=false",
+                );
+                writeln!(stream, "STREAM STATUS RESULT=OK").unwrap();
+            }),
+        ]);
+
+        let client = SamClient::connect(&server.addr);
+        let mut primary = client
+            .new_transient_primary_session("prim_test", &SessionOptions::zero_hop())
+            .unwrap();
+        let sub = primary.new_stream_sub_session("sub_stream").unwrap();
+        let _conn = sub.dial("target_dest").unwrap();
         server.join();
     }
 

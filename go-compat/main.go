@@ -98,6 +98,34 @@ func run(role, samAddr, id, dest, msg string, timeout time.Duration) error {
 		}
 		defer raw.Close()
 		return runRawClient(raw, dest, msg)
+	} else if role == "primary-server" {
+		primary, err := sam.NewPrimarySession(id, keys, []string{})
+		if err != nil {
+			return fmt.Errorf("NewPrimarySession: %w", err)
+		}
+		defer primary.Close()
+
+		sub, err := primary.NewStreamSubSession(id + "-sub")
+		if err != nil {
+			return fmt.Errorf("NewStreamSubSession: %w", err)
+		}
+		defer sub.Close()
+
+		return runServer(sub, keys)
+	} else if role == "primary-client" {
+		primary, err := sam.NewPrimarySession(id, keys, []string{})
+		if err != nil {
+			return fmt.Errorf("NewPrimarySession: %w", err)
+		}
+		defer primary.Close()
+
+		sub, err := primary.NewStreamSubSession(id + "-sub")
+		if err != nil {
+			return fmt.Errorf("NewStreamSubSession: %w", err)
+		}
+		defer sub.Close()
+
+		return runClient(sub, dest, msg)
 	} else {
 		return fmt.Errorf("invalid role: %s", role)
 	}

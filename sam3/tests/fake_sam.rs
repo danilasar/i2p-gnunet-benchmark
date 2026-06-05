@@ -1,4 +1,4 @@
-use sam3::{Destination, Keys, SamClient, SamError, SamSession, SAM_TUNNEL_OPTIONS};
+use sam3::{Destination, Keys, SamClient, SamError, SamSession, SessionOptions};
 use std::{
     io::{Read, Write},
     net::{TcpListener, TcpStream},
@@ -31,7 +31,7 @@ fn session_create_returns_duplicated_id() {
         writeln!(stream, "SESSION STATUS RESULT=DUPLICATED_ID").unwrap();
     });
 
-    let err = SamSession::create_stream(&server.addr, "dup", SAM_TUNNEL_OPTIONS).unwrap_err();
+    let err = SamSession::create_stream(&server.addr, "dup", &SessionOptions::zero_hop()).unwrap_err();
     assert_eq!(err, SamError::DuplicatedId);
     server.join();
 }
@@ -77,7 +77,7 @@ fn dial_timeout_succeeds_within_deadline() {
 
     let client = SamClient::connect(&server.addr);
     let session = client
-        .new_transient_stream_session("client", SAM_TUNNEL_OPTIONS)
+        .new_transient_stream_session("client", &SessionOptions::zero_hop())
         .expect("create stream session");
     let conn = session.dial_timeout("serverdest", Duration::from_secs(1)).unwrap();
     assert_eq!(conn.remote_destination().as_str(), "serverdest");
@@ -106,7 +106,7 @@ fn dial_timeout_returns_error_on_slow_response() {
 
     let client = SamClient::connect(&server.addr);
     let session = client
-        .new_transient_stream_session("client", SAM_TUNNEL_OPTIONS)
+        .new_transient_stream_session("client", &SessionOptions::zero_hop())
         .expect("create stream session");
     let err = session.dial_timeout("serverdest", Duration::from_millis(100)).unwrap_err();
     match err {
@@ -138,7 +138,7 @@ fn accept_timeout_succeeds_when_client_connects() {
 
     let client = SamClient::connect(&server.addr);
     let session = client
-        .new_transient_stream_session("server", SAM_TUNNEL_OPTIONS)
+        .new_transient_stream_session("server", &SessionOptions::zero_hop())
         .expect("create stream session");
     let listener = session.listen();
     let conn = listener.accept_timeout(Duration::from_secs(1)).unwrap();
@@ -169,7 +169,7 @@ fn accept_timeout_returns_error_when_no_client() {
 
     let client = SamClient::connect(&server.addr);
     let session = client
-        .new_transient_stream_session("server", SAM_TUNNEL_OPTIONS)
+        .new_transient_stream_session("server", &SessionOptions::zero_hop())
         .expect("create stream session");
     let listener = session.listen();
     let err = listener.accept_timeout(Duration::from_millis(100)).unwrap_err();
@@ -264,7 +264,7 @@ fn stream_session_lookup_uses_sam_addr() {
     ]);
     let client = SamClient::connect(&server.addr);
     let session = client
-        .new_transient_stream_session("client", SAM_TUNNEL_OPTIONS)
+        .new_transient_stream_session("client", &SessionOptions::zero_hop())
         .expect("create stream session");
     let dest = session.lookup("example.i2p").unwrap();
     assert_eq!(dest.as_str(), "base64dest");
@@ -312,7 +312,7 @@ fn dial_exposes_local_and_remote_destination() {
     ]);
     let client = SamClient::connect(&server.addr);
     let session = client
-        .new_transient_stream_session("client", SAM_TUNNEL_OPTIONS)
+        .new_transient_stream_session("client", &SessionOptions::zero_hop())
         .expect("create stream session");
     let conn = session.dial("remotedest").unwrap();
     assert_eq!(conn.remote_destination().as_str(), "remotedest");
@@ -386,7 +386,7 @@ fn create_stream_sends_expected_sam_commands() {
         assert_eq!(stream.read(&mut eof).unwrap(), 0);
     });
 
-    let session = SamSession::create_stream(&server.addr, "test_session", SAM_TUNNEL_OPTIONS)
+    let session = SamSession::create_stream(&server.addr, "test_session", &SessionOptions::zero_hop())
         .expect("create stream session");
 
     assert_eq!(session.destination().as_str(), "pubdest");
@@ -415,7 +415,7 @@ fn sam_client_creates_stream_session_with_destination() {
 
     let client = SamClient::connect(&server.addr);
     let session = client
-        .new_transient_stream_session("api_session", SAM_TUNNEL_OPTIONS)
+        .new_transient_stream_session("api_session", &SessionOptions::zero_hop())
         .expect("create stream session");
 
     assert_eq!(session.id(), "api_session");
@@ -478,7 +478,7 @@ fn sam_client_creates_stream_session_with_existing_keys() {
     let client = SamClient::connect(&server.addr);
     let keys = Keys::new("existingpub", "existingpriv");
     let session = client
-        .new_stream_session("keyed_session", &keys, SAM_TUNNEL_OPTIONS)
+        .new_stream_session("keyed_session", &keys, &SessionOptions::zero_hop())
         .expect("create keyed stream session");
 
     assert_eq!(session.destination().as_str(), "existingpub");
@@ -569,7 +569,7 @@ fn stream_session_dial_uses_session_id() {
     ]);
     let client = SamClient::connect(&server.addr);
     let session = client
-        .new_transient_stream_session("client", SAM_TUNNEL_OPTIONS)
+        .new_transient_stream_session("client", &SessionOptions::zero_hop())
         .expect("create stream session");
     drop(session.dial("serverdest").expect("dial stream"));
     server.join();
@@ -619,7 +619,7 @@ fn stream_listener_accept_uses_session_id() {
     ]);
     let client = SamClient::connect(&server.addr);
     let session = client
-        .new_transient_stream_session("server", SAM_TUNNEL_OPTIONS)
+        .new_transient_stream_session("server", &SessionOptions::zero_hop())
         .expect("create stream session");
     let listener = session.listen();
     assert_eq!(listener.id(), "server");
@@ -646,7 +646,7 @@ fn create_stream_returns_sam_errors() {
         .unwrap();
     });
 
-    let err = match SamSession::create_stream(&server.addr, "test_session", SAM_TUNNEL_OPTIONS) {
+    let err = match SamSession::create_stream(&server.addr, "test_session", &SessionOptions::zero_hop()) {
         Ok(_) => panic!("create must fail"),
         Err(err) => err,
     };
@@ -686,6 +686,32 @@ impl FakeSam {
     fn join(self) {
         self.handle.join().expect("fake SAM thread");
     }
+}
+
+#[test]
+fn session_create_uses_options_from_session_options() {
+    let server = FakeSam::spawn(|mut stream| {
+        expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+        writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+
+        expect_line(&mut stream, "DEST GENERATE SIGNATURE_TYPE=7");
+        writeln!(stream, "DEST REPLY PUB=pubdest PRIV=privdest").unwrap();
+
+        let create = read_line(&mut stream);
+        assert!(create.contains("inbound.length=1"));
+        assert!(create.contains("outbound.length=1"));
+        assert!(!create.contains("inbound.quantity="));
+        writeln!(stream, "SESSION STATUS RESULT=OK").unwrap();
+    });
+
+    let client = SamClient::connect(&server.addr);
+    let _ = client
+        .new_transient_stream_session(
+            "test",
+            &SessionOptions::default().inbound_length(1).outbound_length(1),
+        )
+        .unwrap();
+    server.join();
 }
 
 fn expect_line(stream: &mut TcpStream, expected: &str) {

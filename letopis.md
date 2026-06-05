@@ -776,3 +776,64 @@ result только после EOF» Rust-тест, читающий result до
 - `just test-transfer` — PASS (регрессий нет).
 - `just build` — Docker-образ собирается корректно.
 - `cargo build --workspace` — PASS, 0 предупреждений.
+
+## SessionOptions builder, 2026-06-05
+
+Реализован типизированный builder для параметров туннельной сессии SAM.
+Удалена неструктурированная константа `SAM_TUNNEL_OPTIONS: &[(&str, &str)]`.
+
+### Что сделано
+
+- Новый тип `SessionOptions` в `sam3/src/session.rs` с полями `Option<T>`:
+  восемь параметров туннеля (`inbound_length`, `outbound_length`,
+  `inbound_length_variance`, `outbound_length_variance`, `inbound_quantity`,
+  `outbound_quantity`, `inbound_backup_quantity`, `outbound_backup_quantity`).
+- `Default` → все `None` — ничего не передаётся в `SESSION CREATE`,
+  i2pd использует собственные дефолты.
+- Builder-методы — каждый возвращает `Self` (builder pattern).
+- `SessionOptions::zero_hop()` — именованный конструктор, замена
+  `SAM_TUNNEL_OPTIONS`: явно задаёт 0-hop, variance=0, quantity=2,
+  backupQuantity=0.
+- `pub(crate) fn to_pairs(&self) -> Vec<(String, String)>` — сериализует
+  только `Some`-поля; порядок полей в выводе не контрактный
+  (SAM-протокол нечувствителен к порядку опций).
+- Подписи `SamClient::new_stream_session` и `new_transient_stream_session`
+  изменены: `&[(&str, &str)]` → `&SessionOptions`.
+  `SamSession::create_stream`, `create_stream_with_keys`, `create_stream_on` —
+  аналогично.
+- `SAM_TUNNEL_OPTIONS` удалён из `session.rs` и `lib.rs`.
+- `SessionOptions` экспортируется из `lib.rs`.
+- Все вызывающие места обновлены: `sam-bench`, `sam-compat`, `testbed/tests/`,
+  `sam3/tests/fake_sam.rs`.
+
+### Нетривиальные решения
+
+**`Option<T>` вместо значений по умолчанию** — если хранить `u8` с дефолтом `0`,
+теряется различие между «явно передано 0» и «не указано». `Option<T>` сохраняет
+это различие: `Default` → все `None` → пустой `to_pairs()`, i2pd выбирает сам;
+`zero_hop()` → все `Some(...)` → 8 явных пар.
+
+**Тесты `to_pairs()` внутри `mod tests` в `session.rs`** — метод `pub(crate)`
+недоступен из `sam3/tests/fake_sam.rs` (интеграционные тесты — внешний код).
+Юнит-тесты `SessionOptions` размещены в существующем `mod tests` внутри
+`session.rs`; интеграционный тест `session_create_uses_options_from_session_options`
+проверяет wire-format через FakeSam и не требует прямого вызова `to_pairs()`.
+
+**Конфликт `mod tests`** — при добавлении тестов обнаружен уже существующий
+`mod tests` в конце `session.rs`. Новые тесты объединены с ним вместо создания
+второго блока.
+
+**`SIGNATURE_TYPE` остаётся отдельно** — параметр типа подписи ключей не переехал
+в `SessionOptions`: это характеристика ключевой пары, а не туннельной политики.
+Добавляется в `SESSION CREATE` отдельно после опций туннеля.
+
+### Проверки
+
+- 3 новых unit-теста в `mod tests` в `session.rs` — PASS:
+  `session_options_default_produces_empty_pairs`,
+  `session_options_builder_sets_inbound_length`,
+  `session_options_zero_hop_produces_all_eight_pairs`.
+- 1 новый интеграционный тест в `fake_sam.rs` — PASS:
+  `session_create_uses_options_from_session_options` (позитив + негатив).
+- `cargo test -p sam3` — 29 тестов, PASS, 0 предупреждений.
+- `cargo build --workspace` — PASS, 0 предупреждений.

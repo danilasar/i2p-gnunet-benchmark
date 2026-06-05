@@ -1,5 +1,5 @@
 use clap::Parser;
-use sam3::{SamClient, SamConn, SamError, StreamSession, SAM_TUNNEL_OPTIONS};
+use sam3::{SamClient, SamConn, SamError, SessionOptions, StreamSession};
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::io::{Read, Write};
@@ -56,7 +56,7 @@ fn run_sender(args: Args) -> Result<(), Box<dyn Error>> {
     let msg = args.msg.ok_or("--msg is required for sender")?;
 
     let client = SamClient::connect(&args.sam);
-    let session = client.new_transient_stream_session(&args.id, SAM_TUNNEL_OPTIONS)?;
+    let session = client.new_transient_stream_session(&args.id, &SessionOptions::zero_hop())?;
 
     let deadline = Instant::now() + Duration::from_secs(120);
     let mut conn = dial_with_retry(&session, &dest, deadline)?;
@@ -97,7 +97,7 @@ fn dial_with_retry(session: &StreamSession, dest: &str, deadline: Instant) -> Re
 
 fn run_receiver(args: Args) -> Result<(), Box<dyn Error>> {
     let client = SamClient::connect(&args.sam);
-    let session = client.new_transient_stream_session(&args.id, SAM_TUNNEL_OPTIONS)?;
+    let session = client.new_transient_stream_session(&args.id, &SessionOptions::zero_hop())?;
     let dest = session.destination().to_string();
     let listener = session.listen();
 

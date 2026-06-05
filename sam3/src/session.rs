@@ -63,16 +63,100 @@ impl io::Write for SamConn {
 
 pub const DEFAULT_SIGNATURE_TYPE: &str = "7";
 
-pub const SAM_TUNNEL_OPTIONS: &[(&str, &str)] = &[
-    ("inbound.length", "0"),
-    ("outbound.length", "0"),
-    ("inbound.lengthVariance", "0"),
-    ("outbound.lengthVariance", "0"),
-    ("inbound.backupQuantity", "0"),
-    ("outbound.backupQuantity", "0"),
-    ("inbound.quantity", "2"),
-    ("outbound.quantity", "2"),
-];
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SessionOptions {
+    inbound_length: Option<u8>,
+    outbound_length: Option<u8>,
+    inbound_length_variance: Option<i8>,
+    outbound_length_variance: Option<i8>,
+    inbound_quantity: Option<u8>,
+    outbound_quantity: Option<u8>,
+    inbound_backup_quantity: Option<u8>,
+    outbound_backup_quantity: Option<u8>,
+}
+
+impl SessionOptions {
+    pub fn inbound_length(mut self, n: u8) -> Self {
+        self.inbound_length = Some(n);
+        self
+    }
+
+    pub fn outbound_length(mut self, n: u8) -> Self {
+        self.outbound_length = Some(n);
+        self
+    }
+
+    pub fn inbound_length_variance(mut self, n: i8) -> Self {
+        self.inbound_length_variance = Some(n);
+        self
+    }
+
+    pub fn outbound_length_variance(mut self, n: i8) -> Self {
+        self.outbound_length_variance = Some(n);
+        self
+    }
+
+    pub fn inbound_quantity(mut self, n: u8) -> Self {
+        self.inbound_quantity = Some(n);
+        self
+    }
+
+    pub fn outbound_quantity(mut self, n: u8) -> Self {
+        self.outbound_quantity = Some(n);
+        self
+    }
+
+    pub fn inbound_backup_quantity(mut self, n: u8) -> Self {
+        self.inbound_backup_quantity = Some(n);
+        self
+    }
+
+    pub fn outbound_backup_quantity(mut self, n: u8) -> Self {
+        self.outbound_backup_quantity = Some(n);
+        self
+    }
+
+    pub fn zero_hop() -> Self {
+        Self::default()
+            .inbound_length(0)
+            .outbound_length(0)
+            .inbound_length_variance(0)
+            .outbound_length_variance(0)
+            .inbound_quantity(2)
+            .outbound_quantity(2)
+            .inbound_backup_quantity(0)
+            .outbound_backup_quantity(0)
+    }
+
+    pub(crate) fn to_pairs(&self) -> Vec<(String, String)> {
+        let mut pairs = Vec::new();
+        if let Some(v) = self.inbound_length {
+            pairs.push(("inbound.length".to_string(), v.to_string()));
+        }
+        if let Some(v) = self.outbound_length {
+            pairs.push(("outbound.length".to_string(), v.to_string()));
+        }
+        if let Some(v) = self.inbound_length_variance {
+            pairs.push(("inbound.lengthVariance".to_string(), v.to_string()));
+        }
+        if let Some(v) = self.outbound_length_variance {
+            pairs.push(("outbound.lengthVariance".to_string(), v.to_string()));
+        }
+        if let Some(v) = self.inbound_quantity {
+            pairs.push(("inbound.quantity".to_string(), v.to_string()));
+        }
+        if let Some(v) = self.outbound_quantity {
+            pairs.push(("outbound.quantity".to_string(), v.to_string()));
+        }
+        if let Some(v) = self.inbound_backup_quantity {
+            pairs.push(("inbound.backupQuantity".to_string(), v.to_string()));
+        }
+        if let Some(v) = self.outbound_backup_quantity {
+            pairs.push(("outbound.backupQuantity".to_string(), v.to_string()));
+        }
+        pairs
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Destination(String);
@@ -210,7 +294,7 @@ impl SamClient {
         &self,
         id: impl Into<String>,
         keys: &Keys,
-        options: &[(&str, &str)],
+        options: &SessionOptions,
     ) -> Result<StreamSession, crate::SamError> {
         let id = id.into();
         let session = SamSession::create_stream_with_keys(&self.sam_addr, &id, keys, options)?;
@@ -224,7 +308,7 @@ impl SamClient {
     pub fn new_transient_stream_session(
         &self,
         id: impl Into<String>,
-        options: &[(&str, &str)],
+        options: &SessionOptions,
     ) -> Result<StreamSession, crate::SamError> {
         let id = id.into();
         let session = SamSession::create_stream(&self.sam_addr, &id, options)?;
@@ -344,7 +428,7 @@ impl SamSession {
     pub fn create_stream(
         sam_addr: &str,
         id: &str,
-        options: &[(&str, &str)],
+        options: &SessionOptions,
     ) -> Result<Self, crate::SamError> {
         let mut stream = TcpStream::connect(sam_addr)?;
         hello(&mut stream)?;
@@ -356,7 +440,7 @@ impl SamSession {
         sam_addr: &str,
         id: &str,
         keys: &Keys,
-        options: &[(&str, &str)],
+        options: &SessionOptions,
     ) -> Result<Self, crate::SamError> {
         let mut stream = TcpStream::connect(sam_addr)?;
         hello(&mut stream)?;
@@ -467,14 +551,14 @@ fn create_stream_on(
     mut stream: TcpStream,
     id: &str,
     keys: &Keys,
-    options: &[(&str, &str)],
+    options: &SessionOptions,
 ) -> Result<SamSession, crate::SamError> {
     write!(
         stream,
         "SESSION CREATE STYLE=STREAM ID={id} DESTINATION={} ",
         keys.private_key()
     )?;
-    for (key, value) in options {
+    for (key, value) in options.to_pairs() {
         write!(stream, "{key}={value} ")?;
     }
     write!(stream, "SIGNATURE_TYPE={DEFAULT_SIGNATURE_TYPE}\n")?;
@@ -615,7 +699,37 @@ fn unescape_quoted(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{ensure_ok, parse_fields, Keys};
+    use super::{ensure_ok, parse_fields, Keys, SessionOptions};
+
+    #[test]
+    fn session_options_default_produces_empty_pairs() {
+        let options = SessionOptions::default();
+        assert!(options.to_pairs().is_empty());
+    }
+
+    #[test]
+    fn session_options_builder_sets_inbound_length() {
+        let options = SessionOptions::default().inbound_length(3);
+        let pairs = options.to_pairs();
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(pairs[0], ("inbound.length".to_string(), "3".to_string()));
+    }
+
+    #[test]
+    fn session_options_zero_hop_produces_all_eight_pairs() {
+        let options = SessionOptions::zero_hop();
+        let pairs = options.to_pairs();
+        assert_eq!(pairs.len(), 8);
+        let keys: Vec<_> = pairs.iter().map(|(k, _)| k.as_str()).collect();
+        assert!(keys.contains(&"inbound.length"));
+        assert!(keys.contains(&"outbound.length"));
+        assert!(keys.contains(&"inbound.lengthVariance"));
+        assert!(keys.contains(&"outbound.lengthVariance"));
+        assert!(keys.contains(&"inbound.quantity"));
+        assert!(keys.contains(&"outbound.quantity"));
+        assert!(keys.contains(&"inbound.backupQuantity"));
+        assert!(keys.contains(&"outbound.backupQuantity"));
+    }
 
     #[test]
     fn parse_fields_reads_basic_key_values() {

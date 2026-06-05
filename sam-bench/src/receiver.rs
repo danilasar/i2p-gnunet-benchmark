@@ -2,7 +2,7 @@ use super::{
     messages::{ReadyMsg, ResultMsg},
     wire::receive_payload,
 };
-use sam3::{SamClient, SAM_TUNNEL_OPTIONS};
+use sam3::{SamClient, SessionOptions};
 use std::{
     error::Error,
     io::Write,
@@ -30,7 +30,7 @@ pub fn run_receiver(cfg: ReceiverConfig, w: &mut impl Write) -> Result<(), Box<d
         };
 
     let client = SamClient::connect(&cfg.sam_addr);
-    let session = match client.new_transient_stream_session(&cfg.id, SAM_TUNNEL_OPTIONS) {
+    let session = match client.new_transient_stream_session(&cfg.id, &SessionOptions::zero_hop()) {
         Ok(s) => s,
         Err(e) => return fail(&mut res, w, format!("SAM session: {e}")),
     };

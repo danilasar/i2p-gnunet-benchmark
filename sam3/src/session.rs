@@ -1,9 +1,13 @@
 use std::{
     collections::HashMap,
     error::Error,
+    fmt, fs,
     io::{Read, Write},
     net::TcpStream,
+    path::Path,
 };
+
+pub const DEFAULT_SIGNATURE_TYPE: &str = "7";
 
 pub const SAM_TUNNEL_OPTIONS: &[(&str, &str)] = &[
     ("inbound.length", "0"),
@@ -16,9 +20,123 @@ pub const SAM_TUNNEL_OPTIONS: &[(&str, &str)] = &[
     ("outbound.quantity", "2"),
 ];
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Destination(String);
+
+impl Destination {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn into_string(self) -> String {
+        self.0
+    }
+}
+
+impl fmt::Display for Destination {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl From<String> for Destination {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+impl From<&str> for Destination {
+    fn from(value: &str) -> Self {
+        Self(value.to_string())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrivateKey(String);
+
+impl PrivateKey {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn into_string(self) -> String {
+        self.0
+    }
+}
+
+impl fmt::Display for PrivateKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl From<String> for PrivateKey {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+impl From<&str> for PrivateKey {
+    fn from(value: &str) -> Self {
+        Self(value.to_string())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Keys {
+    public: Destination,
+    private: PrivateKey,
+}
+
+impl Keys {
+    pub fn new(public: impl Into<Destination>, private: impl Into<PrivateKey>) -> Self {
+        Self {
+            public: public.into(),
+            private: private.into(),
+        }
+    }
+
+    pub fn destination(&self) -> &Destination {
+        &self.public
+    }
+
+    pub fn private_key(&self) -> &PrivateKey {
+        &self.private
+    }
+
+    pub fn write_keyfile(&self, path: impl AsRef<Path>) -> Result<(), Box<dyn Error>> {
+        fs::write(
+            path,
+            format!("PUB={}\nPRIV={}\n", self.destination(), self.private_key()),
+        )?;
+        Ok(())
+    }
+
+    pub fn read_keyfile(path: impl AsRef<Path>) -> Result<Self, Box<dyn Error>> {
+        let contents = fs::read_to_string(path)?;
+        if let Some(keys) = parse_keyfile(&contents) {
+            return Ok(keys);
+        }
+        Ok(Self::new("", contents.trim_end()))
+    }
+
+    pub fn with_destination(mut self, destination: impl Into<Destination>) -> Self {
+        self.public = destination.into();
+        self
+    }
+}
+
 pub struct SamSession {
     _control: TcpStream,
-    pub destination: String,
+    keys: Keys,
 }
 
 #[derive(Debug, Clone)]
@@ -36,6 +154,21 @@ impl SamClient {
     pub fn new_stream_session(
         &self,
         id: impl Into<String>,
+        keys: &Keys,
+        options: &[(&str, &str)],
+    ) -> Result<StreamSession, Box<dyn Error>> {
+        let id = id.into();
+        let session = SamSession::create_stream_with_keys(&self.sam_addr, &id, keys, options)?;
+        Ok(StreamSession {
+            sam_addr: self.sam_addr.clone(),
+            id,
+            session,
+        })
+    }
+
+    pub fn new_transient_stream_session(
+        &self,
+        id: impl Into<String>,
         options: &[(&str, &str)],
     ) -> Result<StreamSession, Box<dyn Error>> {
         let id = id.into();
@@ -45,6 +178,27 @@ impl SamClient {
             id,
             session,
         })
+    }
+
+    pub fn new_keys(&self) -> Result<Keys, Box<dyn Error>> {
+        self.new_keys_with_signature_type(DEFAULT_SIGNATURE_TYPE)
+    }
+
+    pub fn new_keys_with_signature_type(&self, sig_type: &str) -> Result<Keys, Box<dyn Error>> {
+        let mut stream = TcpStream::connect(&self.sam_addr)?;
+        hello(&mut stream)?;
+        generate_keys_on(&mut stream, sig_type)
+    }
+
+    pub fn ensure_keyfile(&self, path: impl AsRef<Path>) -> Result<Keys, Box<dyn Error>> {
+        let path = path.as_ref();
+        if path.exists() {
+            Keys::read_keyfile(path)
+        } else {
+            let keys = self.new_keys()?;
+            keys.write_keyfile(path)?;
+            Ok(keys)
+        }
     }
 }
 
@@ -63,8 +217,12 @@ impl StreamSession {
         &self.sam_addr
     }
 
-    pub fn destination(&self) -> &str {
-        &self.session.destination
+    pub fn destination(&self) -> &Destination {
+        self.session.destination()
+    }
+
+    pub fn keys(&self) -> &Keys {
+        self.session.keys()
     }
 
     pub fn dial(&self, dest: &str) -> Result<TcpStream, Box<dyn Error>> {
@@ -102,39 +260,19 @@ impl SamSession {
     ) -> Result<Self, Box<dyn Error>> {
         let mut stream = TcpStream::connect(sam_addr)?;
         hello(&mut stream)?;
+        let keys = generate_keys_on(&mut stream, DEFAULT_SIGNATURE_TYPE)?;
+        create_stream_on(stream, id, &keys, options)
+    }
 
-        write!(stream, "DEST GENERATE SIGNATURE_TYPE=7\n")?;
-        stream.flush()?;
-        let line = read_line(&mut stream)?;
-        let fields = parse_fields(&line);
-        if fields.get("RESULT").is_some_and(|v| v != "OK") {
-            return Err(format!("DEST GENERATE failed: {line}").into());
-        }
-        let pub_dest = fields
-            .get("PUB")
-            .ok_or_else(|| format!("DEST GENERATE without PUB: {line}"))?
-            .to_string();
-        let priv_dest = fields
-            .get("PRIV")
-            .ok_or_else(|| format!("DEST GENERATE without PRIV: {line}"))?
-            .to_string();
-
-        write!(
-            stream,
-            "SESSION CREATE STYLE=STREAM ID={id} DESTINATION={priv_dest} "
-        )?;
-        for (key, value) in options {
-            write!(stream, "{key}={value} ")?;
-        }
-        write!(stream, "SIGNATURE_TYPE=7\n")?;
-        stream.flush()?;
-        let line = read_line(&mut stream)?;
-        ensure_ok(&line, "SESSION CREATE")?;
-
-        Ok(Self {
-            _control: stream,
-            destination: pub_dest,
-        })
+    pub fn create_stream_with_keys(
+        sam_addr: &str,
+        id: &str,
+        keys: &Keys,
+        options: &[(&str, &str)],
+    ) -> Result<Self, Box<dyn Error>> {
+        let mut stream = TcpStream::connect(sam_addr)?;
+        hello(&mut stream)?;
+        create_stream_on(stream, id, keys, options)
     }
 
     pub fn connect_stream(
@@ -164,6 +302,71 @@ impl SamSession {
         let _remote_destination = read_line(&mut stream)?;
         Ok(stream)
     }
+
+    pub fn destination(&self) -> &Destination {
+        self.keys.destination()
+    }
+
+    pub fn keys(&self) -> &Keys {
+        &self.keys
+    }
+}
+
+fn generate_keys_on(stream: &mut TcpStream, sig_type: &str) -> Result<Keys, Box<dyn Error>> {
+    write!(stream, "DEST GENERATE SIGNATURE_TYPE={sig_type}\n")?;
+    stream.flush()?;
+    let line = read_line(stream)?;
+    let fields = parse_fields(&line);
+    if fields.get("RESULT").is_some_and(|v| v != "OK") {
+        return Err(format!("DEST GENERATE failed: {line}").into());
+    }
+    let pub_dest = fields
+        .get("PUB")
+        .ok_or_else(|| format!("DEST GENERATE without PUB: {line}"))?
+        .to_string();
+    let priv_dest = fields
+        .get("PRIV")
+        .ok_or_else(|| format!("DEST GENERATE without PRIV: {line}"))?
+        .to_string();
+    Ok(Keys::new(pub_dest, priv_dest))
+}
+
+fn create_stream_on(
+    mut stream: TcpStream,
+    id: &str,
+    keys: &Keys,
+    options: &[(&str, &str)],
+) -> Result<SamSession, Box<dyn Error>> {
+    write!(
+        stream,
+        "SESSION CREATE STYLE=STREAM ID={id} DESTINATION={} ",
+        keys.private_key()
+    )?;
+    for (key, value) in options {
+        write!(stream, "{key}={value} ")?;
+    }
+    write!(stream, "SIGNATURE_TYPE={DEFAULT_SIGNATURE_TYPE}\n")?;
+    stream.flush()?;
+    let line = read_line(&mut stream)?;
+    ensure_ok(&line, "SESSION CREATE")?;
+
+    Ok(SamSession {
+        _control: stream,
+        keys: keys.clone(),
+    })
+}
+
+fn parse_keyfile(contents: &str) -> Option<Keys> {
+    let mut public = None;
+    let mut private = None;
+    for line in contents.lines() {
+        if let Some(value) = line.strip_prefix("PUB=") {
+            public = Some(value.to_string());
+        } else if let Some(value) = line.strip_prefix("PRIV=") {
+            private = Some(value.to_string());
+        }
+    }
+    Some(Keys::new(public?, private?))
 }
 
 fn hello(stream: &mut TcpStream) -> Result<(), Box<dyn Error>> {
@@ -263,7 +466,7 @@ fn unescape_quoted(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{ensure_ok, parse_fields};
+    use super::{ensure_ok, parse_fields, Keys};
 
     #[test]
     fn parse_fields_reads_basic_key_values() {
@@ -301,5 +504,29 @@ mod tests {
             .expect_err("non-OK result must fail");
 
         assert!(err.to_string().contains("STREAM CONNECT failed"));
+    }
+
+    #[test]
+    fn keys_roundtrip_keyfile() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("keys.dat");
+        let keys = Keys::new("pubdest", "privdest");
+
+        keys.write_keyfile(&path).expect("write keyfile");
+        let loaded = Keys::read_keyfile(&path).expect("read keyfile");
+
+        assert_eq!(loaded, keys);
+    }
+
+    #[test]
+    fn keys_read_private_only_keyfile() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("keys.dat");
+        std::fs::write(&path, "privdest\n").expect("write raw keyfile");
+
+        let loaded = Keys::read_keyfile(&path).expect("read keyfile");
+
+        assert_eq!(loaded.destination().as_str(), "");
+        assert_eq!(loaded.private_key().as_str(), "privdest");
     }
 }

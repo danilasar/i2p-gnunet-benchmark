@@ -31,7 +31,7 @@ pub fn run_sender(cfg: SenderConfig, w: &mut impl Write) -> Result<(), Box<dyn E
     let t0 = Instant::now();
     let deadline = t0 + cfg.timeout;
     let client = SamClient::connect(&cfg.sam_addr);
-    let session = match client.new_stream_session(&cfg.id, SAM_TUNNEL_OPTIONS) {
+    let session = match client.new_transient_stream_session(&cfg.id, SAM_TUNNEL_OPTIONS) {
         Ok(s) => s,
         Err(e) => return fail(&mut res, w, format!("SAM session: {e}")),
     };

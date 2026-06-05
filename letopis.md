@@ -480,3 +480,37 @@ transient-destination only; keyfile/lookup/options builder будут отдел
 - `cargo test --workspace --no-run` — PASS.
 - `just test-transfer` — PASS (`setup≈9093ms`, `transfer≈2ms`,
   `goodput≈4194 Mbps`, `first_byte≈9404ms`).
+
+## Ключи и destination в SAM3, 2026-06-05
+
+Начат перенос semantics из Go `sam3.NewKeys()` / `NewStreamSession(id, keys, options)`:
+ключи должны быть отдельным объектом, а session должна уметь создаваться с уже существующим
+private key, не только через transient `DEST GENERATE` внутри `SESSION CREATE`.
+
+Решение по API:
+- `SamClient::new_keys()` — с дефолтным `SIGNATURE_TYPE=7`;
+- `SamClient::new_keys_with_signature_type(sig_type)`;
+- `SamClient::new_stream_session(id, &keys, options)` — session с существующими ключами;
+- `SamClient::new_transient_stream_session(id, options)` — удобный прежний сценарий.
+
+Первый вариант `new_transient_stream_session()` был реализован как два SAM-соединения:
+`new_keys()` и затем `SESSION CREATE`. Быстрые тесты прошли, но `just test-transfer` упал
+на ожидании result от receiver после LeaseSet lookup failure. Чтобы не менять поведение
+benchmark-трафика и не добавлять лишние SAM control-соединения в transient-сценарий,
+решение изменено: `new_transient_stream_session()` должен использовать прежний одно-соединительный
+путь `DEST GENERATE` + `SESSION CREATE` на одном socket. Явный reusable keys API остаётся
+раздельным.
+
+Сверка с Go `sam3`: приложение использовало `s.NewKeys()` и затем
+`s.NewStreamSession(id, keys, options)`, то есть API Go-библиотеки разделяет генерацию ключей
+и создание session. В Rust это соответствует явному пути `new_keys()` + `new_stream_session()`.
+Одно-соединительный `new_transient_stream_session()` оставлен как compatibility helper для
+нашего benchmark, а не как прямой аналог Go `NewKeys`.
+
+Проверки:
+- `just test-unit` — PASS: `sam3` 6 unit tests и 12 fake SAM tests;
+- `cargo test --workspace --no-run` — PASS;
+- первый `just test-transfer` после двух-соединительного transient path — FAIL
+  (`receiver did not send result message`, LeaseSet lookup failure);
+- повторный `just test-transfer` после возврата одно-соединительного transient path — PASS
+  (`setup≈15134ms`, `transfer≈2ms`, `goodput≈4194 Mbps`, `first_byte≈15445ms`).

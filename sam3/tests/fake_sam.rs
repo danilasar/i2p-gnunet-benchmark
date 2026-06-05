@@ -1,4 +1,4 @@
-use sam3::{SamClient, SamSession, SAM_TUNNEL_OPTIONS};
+use sam3::{Keys, SamClient, SamSession, SAM_TUNNEL_OPTIONS};
 use std::{
     io::{Read, Write},
     net::{TcpListener, TcpStream},
@@ -37,7 +37,7 @@ fn create_stream_sends_expected_sam_commands() {
     let session = SamSession::create_stream(&server.addr, "test_session", SAM_TUNNEL_OPTIONS)
         .expect("create stream session");
 
-    assert_eq!(session.destination, "pubdest");
+    assert_eq!(session.destination().as_str(), "pubdest");
     drop(session);
     server.join();
 }
@@ -63,12 +63,110 @@ fn sam_client_creates_stream_session_with_destination() {
 
     let client = SamClient::connect(&server.addr);
     let session = client
-        .new_stream_session("api_session", SAM_TUNNEL_OPTIONS)
+        .new_transient_stream_session("api_session", SAM_TUNNEL_OPTIONS)
         .expect("create stream session");
 
     assert_eq!(session.id(), "api_session");
-    assert_eq!(session.destination(), "pubdest");
+    assert_eq!(session.destination().as_str(), "pubdest");
     drop(session);
+    server.join();
+}
+
+#[test]
+fn sam_client_generates_keys() {
+    let server = FakeSam::spawn(|mut stream| {
+        expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+        writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+
+        expect_line(&mut stream, "DEST GENERATE SIGNATURE_TYPE=7");
+        writeln!(stream, "DEST REPLY PUB=pubdest PRIV=privdest").unwrap();
+    });
+
+    let client = SamClient::connect(&server.addr);
+    let keys = client.new_keys().expect("generate keys");
+
+    assert_eq!(keys.destination().as_str(), "pubdest");
+    assert_eq!(keys.private_key().as_str(), "privdest");
+    server.join();
+}
+
+#[test]
+fn sam_client_generates_keys_with_signature_type() {
+    let server = FakeSam::spawn(|mut stream| {
+        expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+        writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+
+        expect_line(&mut stream, "DEST GENERATE SIGNATURE_TYPE=11");
+        writeln!(stream, "DEST REPLY PUB=pubdest PRIV=privdest").unwrap();
+    });
+
+    let client = SamClient::connect(&server.addr);
+    let keys = client
+        .new_keys_with_signature_type("11")
+        .expect("generate keys");
+
+    assert_eq!(keys.destination().as_str(), "pubdest");
+    assert_eq!(keys.private_key().as_str(), "privdest");
+    server.join();
+}
+
+#[test]
+fn sam_client_creates_stream_session_with_existing_keys() {
+    let server = FakeSam::spawn(|mut stream| {
+        expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+        writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+
+        let create = read_line(&mut stream);
+        assert!(create
+            .starts_with("SESSION CREATE STYLE=STREAM ID=keyed_session DESTINATION=existingpriv "));
+        assert!(create.ends_with("SIGNATURE_TYPE=7"));
+        writeln!(stream, "SESSION STATUS RESULT=OK").unwrap();
+    });
+
+    let client = SamClient::connect(&server.addr);
+    let keys = Keys::new("existingpub", "existingpriv");
+    let session = client
+        .new_stream_session("keyed_session", &keys, SAM_TUNNEL_OPTIONS)
+        .expect("create keyed stream session");
+
+    assert_eq!(session.destination().as_str(), "existingpub");
+    assert_eq!(session.keys(), &keys);
+    drop(session);
+    server.join();
+}
+
+#[test]
+fn sam_client_ensure_keyfile_generates_missing_keys() {
+    let server = FakeSam::spawn(|mut stream| {
+        expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+        writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+
+        expect_line(&mut stream, "DEST GENERATE SIGNATURE_TYPE=7");
+        writeln!(stream, "DEST REPLY PUB=pubdest PRIV=privdest").unwrap();
+    });
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let path = tmp.path().join("keys.dat");
+
+    let client = SamClient::connect(&server.addr);
+    let keys = client.ensure_keyfile(&path).expect("ensure keyfile");
+    let loaded = Keys::read_keyfile(&path).expect("read keyfile");
+
+    assert_eq!(keys, loaded);
+    server.join();
+}
+
+#[test]
+fn sam_client_ensure_keyfile_reuses_existing_keys() {
+    let server = FakeSam::spawn_many(Vec::new());
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let path = tmp.path().join("keys.dat");
+    let keys = Keys::new("existingpub", "existingpriv");
+    keys.write_keyfile(&path).expect("write keyfile");
+
+    let client = SamClient::connect(&server.addr);
+    let loaded = client.ensure_keyfile(&path).expect("ensure keyfile");
+
+    assert_eq!(loaded, keys);
     server.join();
 }
 
@@ -119,7 +217,7 @@ fn stream_session_dial_uses_session_id() {
     ]);
     let client = SamClient::connect(&server.addr);
     let session = client
-        .new_stream_session("client", SAM_TUNNEL_OPTIONS)
+        .new_transient_stream_session("client", SAM_TUNNEL_OPTIONS)
         .expect("create stream session");
     drop(session.dial("serverdest").expect("dial stream"));
     server.join();
@@ -168,7 +266,7 @@ fn stream_listener_accept_uses_session_id() {
     ]);
     let client = SamClient::connect(&server.addr);
     let session = client
-        .new_stream_session("server", SAM_TUNNEL_OPTIONS)
+        .new_transient_stream_session("server", SAM_TUNNEL_OPTIONS)
         .expect("create stream session");
     let listener = session.listen();
     assert_eq!(listener.id(), "server");

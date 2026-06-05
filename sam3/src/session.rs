@@ -2,10 +2,59 @@ use std::{
     collections::HashMap,
     error::Error,
     fmt, fs,
-    io::{Read, Write},
+    io::{self, Read, Write},
     net::TcpStream,
     path::Path,
+    time::Duration,
 };
+
+pub struct SamConn {
+    inner: TcpStream,
+    local: Destination,
+    remote: Destination,
+}
+
+impl SamConn {
+    pub fn new(inner: TcpStream, local: Destination, remote: Destination) -> Self {
+        Self {
+            inner,
+            local,
+            remote,
+        }
+    }
+
+    pub fn local_destination(&self) -> &Destination {
+        &self.local
+    }
+
+    pub fn remote_destination(&self) -> &Destination {
+        &self.remote
+    }
+
+    pub fn set_read_timeout(&self, dur: Option<Duration>) -> io::Result<()> {
+        self.inner.set_read_timeout(dur)
+    }
+
+    pub fn set_write_timeout(&self, dur: Option<Duration>) -> io::Result<()> {
+        self.inner.set_write_timeout(dur)
+    }
+}
+
+impl io::Read for SamConn {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.inner.read(buf)
+    }
+}
+
+impl io::Write for SamConn {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.inner.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
 
 pub const DEFAULT_SIGNATURE_TYPE: &str = "7";
 
@@ -225,14 +274,20 @@ impl StreamSession {
         self.session.keys()
     }
 
-    pub fn dial(&self, dest: &str) -> Result<TcpStream, Box<dyn Error>> {
-        SamSession::connect_stream(&self.sam_addr, &self.id, dest)
+    pub fn dial(&self, dest: &str) -> Result<SamConn, Box<dyn Error>> {
+        let stream = SamSession::connect_stream(&self.sam_addr, &self.id, dest)?;
+        Ok(SamConn::new(
+            stream,
+            self.destination().clone(),
+            Destination::new(dest),
+        ))
     }
 
     pub fn listen(&self) -> StreamListener {
         StreamListener {
             sam_addr: self.sam_addr.clone(),
             id: self.id.clone(),
+            local: self.destination().clone(),
         }
     }
 }
@@ -240,11 +295,12 @@ impl StreamSession {
 pub struct StreamListener {
     sam_addr: String,
     id: String,
+    local: Destination,
 }
 
 impl StreamListener {
-    pub fn accept(&self) -> Result<TcpStream, Box<dyn Error>> {
-        SamSession::accept_stream(&self.sam_addr, &self.id)
+    pub fn accept(&self) -> Result<SamConn, Box<dyn Error>> {
+        SamSession::accept_stream(&self.sam_addr, &self.id, &self.local)
     }
 
     pub fn id(&self) -> &str {
@@ -292,15 +348,19 @@ impl SamSession {
         Ok(stream)
     }
 
-    pub fn accept_stream(sam_addr: &str, id: &str) -> Result<TcpStream, Box<dyn Error>> {
+    pub fn accept_stream(
+        sam_addr: &str,
+        id: &str,
+        local: &Destination,
+    ) -> Result<SamConn, Box<dyn Error>> {
         let mut stream = TcpStream::connect(sam_addr)?;
         hello(&mut stream)?;
         write!(stream, "STREAM ACCEPT ID={id} SILENT=false\n")?;
         stream.flush()?;
         let line = read_line(&mut stream)?;
         ensure_ok(&line, "STREAM ACCEPT")?;
-        let _remote_destination = read_line(&mut stream)?;
-        Ok(stream)
+        let remote = Destination::new(read_line(&mut stream)?);
+        Ok(SamConn::new(stream, local.clone(), remote))
     }
 
     pub fn destination(&self) -> &Destination {

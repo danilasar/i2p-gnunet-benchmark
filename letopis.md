@@ -539,3 +539,48 @@ benchmark-трафика и не добавлять лишние SAM control-с�
 - examples и crate-level README для `sam3`;
 - real i2pd integration tests для reusable keyfile: создать ключи, сохранить, пересоздать
   session с тем же private key и проверить стабильность destination/приём stream.
+
+## SamConn: типизированное соединение с metadata, 2026-06-05
+
+Реализован `SamConn` в `sam3/src/session.rs` по ТЗ (TDD).
+
+### Что сделано
+
+- Новый тип `SamConn { inner: TcpStream, local: Destination, remote: Destination }` с `Read + Write`,
+  `set_read_timeout`, `set_write_timeout`, `local_destination()`, `remote_destination()`.
+- `SamSession::accept_stream` теперь принимает `local: &Destination` и возвращает `SamConn`:
+  вторая строка после `STREAM ACCEPT OK` (raw base64 destination) больше не выбрасывается.
+- `StreamListener` получил поле `local: Destination`; `session.listen()` клонирует destination сессии.
+- `StreamListener::accept()` → `SamConn`.
+- `StreamSession::dial()` → `SamConn` (local = сессионный destination, remote = переданный адрес).
+- `SamConn` экспортируется из `sam3/src/lib.rs`.
+
+### Нетривиальные решения
+
+**`SamConn::new` оставлен `pub`** — иначе `dial_with_retry` в `sam-bench` не мог бы собрать
+`SamConn` внутри потока. `dial_with_retry` вынужден спавнить поток с `move`-замыканием
+и клонировать `(sam_addr, id, local_dest)` заранее, потому что `&StreamSession` не живёт
+через `thread::spawn`. Вызов `SamSession::connect_stream` возвращает `TcpStream`, после
+чего `SamConn::new` упаковывает его вместе с destination-метаданными. Это единственное место
+в кодовой базе, где конструктор вызывается вне `session.rs`; намеренный компромисс.
+
+**Исправлена ошибка в старом тесте** `accept_stream_sends_expected_sam_commands_and_returns_socket`:
+FakeSam ошибочно слал `"REMOTE DESTINATION=clientdest"` вместо просто `"clientdest"`.
+Тест проходил, потому что `remote_destination()` не проверялся, но хранимое значение
+было бы неверным. Исправлено на `writeln!(stream, "clientdest")`.
+
+**Нестабильный первый прогон `just test-transfer`** — упал с `"receiver did not send result message"`
+из-за ошибок построения туннелей i2pd (`Can't find floodfill`) на старте сети. Регрессий
+в коде нет; повторный прогон прошёл. Это поведение тестового стенда, не ошибка библиотеки.
+
+**Предупреждение `unused_assignments`** в `sender.rs` — переменная `last_error` инициализировалась
+пустой строкой, которая сразу перезаписывалась. Исправлено сужением области видимости.
+
+### Проверки
+
+- 4 новых TDD-теста в `sam3/tests/fake_sam.rs` — PASS:
+  `accept_exposes_remote_destination`, `dial_exposes_local_and_remote_destination`,
+  `samconn_read_write_delegates_to_socket`, `samconn_set_timeout_does_not_error`.
+- `just test-unit` — PASS (16 тестов).
+- `cargo test --workspace --no-run` — PASS (без предупреждений).
+- `just test-transfer` — PASS.

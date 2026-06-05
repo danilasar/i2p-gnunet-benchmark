@@ -1,9 +1,8 @@
 use super::{messages::ResultMsg, payload::PayloadReader, wire::send_payload};
-use sam3::{SamClient, SamSession, StreamSession, SAM_TUNNEL_OPTIONS};
+use sam3::{Destination, SamClient, SamConn, SamSession, StreamSession, SAM_TUNNEL_OPTIONS};
 use std::{
     error::Error,
     io::Write,
-    net::TcpStream,
     sync::mpsc,
     thread,
     time::{Duration, Instant},
@@ -70,21 +69,22 @@ fn dial_with_retry(
     session: &StreamSession,
     dest: String,
     deadline: Instant,
-) -> Result<TcpStream, Box<dyn Error>> {
+) -> Result<SamConn, Box<dyn Error>> {
     let per_attempt = Duration::from_secs(90);
     let retry_interval = Duration::from_secs(5);
-    let mut last_error: String;
-
     loop {
         let (tx, rx) = mpsc::channel();
         let sam_addr_attempt = session.sam_addr().to_string();
         let id_attempt = session.id().to_string();
+        let local_dest = session.destination().clone();
         let dest_attempt = dest.clone();
         thread::spawn(move || {
-            let result = SamSession::connect_stream(&sam_addr_attempt, &id_attempt, &dest_attempt);
+            let result = SamSession::connect_stream(&sam_addr_attempt, &id_attempt, &dest_attempt)
+                .map(|stream| SamConn::new(stream, local_dest, Destination::new(dest_attempt)));
             let _ = tx.send(result.map_err(|e| e.to_string()));
         });
 
+        let last_error: String;
         match rx.recv_timeout(per_attempt) {
             Ok(Ok(conn)) => return Ok(conn),
             Ok(Err(e)) => last_error = e,

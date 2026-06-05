@@ -1,10 +1,97 @@
-use sam3::{Keys, SamClient, SamSession, SAM_TUNNEL_OPTIONS};
+use sam3::{Destination, Keys, SamClient, SamSession, SAM_TUNNEL_OPTIONS};
 use std::{
     io::{Read, Write},
     net::{TcpListener, TcpStream},
     thread,
     time::Duration,
 };
+
+#[test]
+fn accept_exposes_remote_destination() {
+    let server = FakeSam::spawn(|mut stream| {
+        expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+        writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+
+        expect_line(&mut stream, "STREAM ACCEPT ID=server SILENT=false");
+        writeln!(stream, "STREAM STATUS RESULT=OK").unwrap();
+        writeln!(stream, "clientdest").unwrap();
+    });
+
+    let local_dest = Destination::new("localdest");
+    let conn = SamSession::accept_stream(&server.addr, "server", &local_dest).unwrap();
+    assert_eq!(conn.remote_destination().as_str(), "clientdest");
+    assert_eq!(conn.local_destination().as_str(), "localdest");
+    server.join();
+}
+
+#[test]
+fn dial_exposes_local_and_remote_destination() {
+    let server = FakeSam::spawn_many(vec![
+        Box::new(|mut stream| {
+            expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+            writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+            expect_line(&mut stream, "DEST GENERATE SIGNATURE_TYPE=7");
+            writeln!(stream, "DEST REPLY PUB=pubdest PRIV=privdest").unwrap();
+            let _ = read_line(&mut stream);
+            writeln!(stream, "SESSION STATUS RESULT=OK").unwrap();
+        }),
+        Box::new(|mut stream| {
+            expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+            writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+            expect_line(
+                &mut stream,
+                "STREAM CONNECT ID=client DESTINATION=remotedest FROM_PORT=0 TO_PORT=0 SILENT=false",
+            );
+            writeln!(stream, "STREAM STATUS RESULT=OK").unwrap();
+        }),
+    ]);
+    let client = SamClient::connect(&server.addr);
+    let session = client
+        .new_transient_stream_session("client", SAM_TUNNEL_OPTIONS)
+        .expect("create stream session");
+    let conn = session.dial("remotedest").unwrap();
+    assert_eq!(conn.remote_destination().as_str(), "remotedest");
+    assert_eq!(conn.local_destination().as_str(), "pubdest");
+    server.join();
+}
+
+#[test]
+fn samconn_read_write_delegates_to_socket() {
+    let server = FakeSam::spawn(|mut stream| {
+        expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+        writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+
+        expect_line(&mut stream, "STREAM ACCEPT ID=server SILENT=false");
+        writeln!(stream, "STREAM STATUS RESULT=OK").unwrap();
+        writeln!(stream, "clientdest").unwrap();
+        stream.write_all(b"hello").unwrap();
+    });
+
+    let local_dest = Destination::new("localdest");
+    let mut conn = SamSession::accept_stream(&server.addr, "server", &local_dest).unwrap();
+    let mut buf = [0u8; 5];
+    conn.read_exact(&mut buf).unwrap();
+    assert_eq!(&buf, b"hello");
+    server.join();
+}
+
+#[test]
+fn samconn_set_timeout_does_not_error() {
+    let server = FakeSam::spawn(|mut stream| {
+        expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+        writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+
+        expect_line(&mut stream, "STREAM ACCEPT ID=server SILENT=false");
+        writeln!(stream, "STREAM STATUS RESULT=OK").unwrap();
+        writeln!(stream, "clientdest").unwrap();
+    });
+
+    let local_dest = Destination::new("localdest");
+    let conn = SamSession::accept_stream(&server.addr, "server", &local_dest).unwrap();
+    conn.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    conn.set_write_timeout(Some(Duration::from_secs(5))).unwrap();
+    server.join();
+}
 
 #[test]
 fn create_stream_sends_expected_sam_commands() {
@@ -231,11 +318,12 @@ fn accept_stream_sends_expected_sam_commands_and_returns_socket() {
 
         expect_line(&mut stream, "STREAM ACCEPT ID=server SILENT=false");
         writeln!(stream, "STREAM STATUS RESULT=OK").unwrap();
-        writeln!(stream, "REMOTE DESTINATION=clientdest").unwrap();
+        writeln!(stream, "clientdest").unwrap();
         stream.write_all(b"hello").unwrap();
     });
 
-    let mut conn = SamSession::accept_stream(&server.addr, "server").expect("accept stream");
+    let local_dest = Destination::new("localdest");
+    let mut conn = SamSession::accept_stream(&server.addr, "server", &local_dest).expect("accept stream");
     let mut buf = [0u8; 5];
     conn.read_exact(&mut buf).unwrap();
 
@@ -260,7 +348,7 @@ fn stream_listener_accept_uses_session_id() {
             writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
             expect_line(&mut stream, "STREAM ACCEPT ID=server SILENT=false");
             writeln!(stream, "STREAM STATUS RESULT=OK").unwrap();
-            writeln!(stream, "REMOTE DESTINATION=clientdest").unwrap();
+            writeln!(stream, "clientdest").unwrap();
             stream.write_all(b"hello").unwrap();
         }),
     ]);
@@ -272,6 +360,7 @@ fn stream_listener_accept_uses_session_id() {
     assert_eq!(listener.id(), "server");
 
     let mut conn = listener.accept().expect("accept stream");
+    assert_eq!(conn.local_destination().as_str(), "pubdest");
     let mut buf = [0u8; 5];
     conn.read_exact(&mut buf).unwrap();
     assert_eq!(&buf, b"hello");

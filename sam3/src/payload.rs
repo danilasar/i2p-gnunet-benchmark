@@ -34,3 +34,31 @@ pub fn expected_sha256(size: i64, seed: i64) -> [u8; 32] {
     std::io::copy(&mut r, &mut h).expect("hash payload");
     h.finalize().into()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{expected_sha256, PayloadReader};
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+
+    #[test]
+    fn payload_reader_is_deterministic() {
+        let mut reader = PayloadReader::new(8, 42);
+        let mut buf = Vec::new();
+
+        reader.read_to_end(&mut buf).expect("read payload");
+
+        assert_eq!(buf, vec![0, 43, 86, 129, 172, 215, 2, 45]);
+    }
+
+    #[test]
+    fn expected_sha256_matches_generated_payload() {
+        let mut reader = PayloadReader::new(1024, 42);
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes).expect("read payload");
+
+        let actual: [u8; 32] = Sha256::digest(&bytes).into();
+
+        assert_eq!(expected_sha256(1024, 42), actual);
+    }
+}

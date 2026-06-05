@@ -125,10 +125,108 @@ fn read_line(stream: &mut TcpStream) -> Result<String, Box<dyn Error>> {
 }
 
 fn parse_fields(line: &str) -> HashMap<String, String> {
-    line.split_whitespace()
-        .filter_map(|part| {
-            let (key, value) = part.split_once('=')?;
-            Some((key.to_string(), value.to_string()))
-        })
-        .collect()
+    let mut fields = HashMap::new();
+    let mut parts = line.split_whitespace().peekable();
+
+    while let Some(part) = parts.next() {
+        let Some((key, raw_value)) = part.split_once('=') else {
+            continue;
+        };
+
+        if let Some(stripped) = raw_value.strip_prefix('"') {
+            let mut value = String::from(stripped);
+            while !ends_with_unescaped_quote(&value) {
+                let Some(next) = parts.next() else {
+                    break;
+                };
+                value.push(' ');
+                value.push_str(next);
+            }
+            if ends_with_unescaped_quote(&value) {
+                value.pop();
+            }
+            fields.insert(key.to_string(), unescape_quoted(&value));
+        } else {
+            fields.insert(key.to_string(), raw_value.to_string());
+        }
+    }
+
+    fields
+}
+
+fn ends_with_unescaped_quote(value: &str) -> bool {
+    if !value.ends_with('"') {
+        return false;
+    }
+
+    let backslashes = value
+        .as_bytes()
+        .iter()
+        .rev()
+        .skip(1)
+        .take_while(|&&b| b == b'\\')
+        .count();
+    backslashes % 2 == 0
+}
+
+fn unescape_quoted(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut escaped = false;
+    for ch in value.chars() {
+        if escaped {
+            out.push(ch);
+            escaped = false;
+        } else if ch == '\\' {
+            escaped = true;
+        } else {
+            out.push(ch);
+        }
+    }
+    if escaped {
+        out.push('\\');
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ensure_ok, parse_fields};
+
+    #[test]
+    fn parse_fields_reads_basic_key_values() {
+        let fields = parse_fields("HELLO REPLY RESULT=OK VERSION=3.3");
+
+        assert_eq!(fields.get("RESULT").map(String::as_str), Some("OK"));
+        assert_eq!(fields.get("VERSION").map(String::as_str), Some("3.3"));
+        assert!(!fields.contains_key("HELLO"));
+    }
+
+    #[test]
+    fn parse_fields_reads_quoted_values_with_spaces() {
+        let fields = parse_fields(r#"STREAM STATUS RESULT=I2P_ERROR MESSAGE="cannot reach peer""#);
+
+        assert_eq!(
+            fields.get("MESSAGE").map(String::as_str),
+            Some("cannot reach peer")
+        );
+    }
+
+    #[test]
+    fn parse_fields_unescapes_quoted_values() {
+        let fields = parse_fields(r#"X Y MESSAGE="bad \"quoted\" value" PATH="a\\b""#);
+
+        assert_eq!(
+            fields.get("MESSAGE").map(String::as_str),
+            Some(r#"bad "quoted" value"#)
+        );
+        assert_eq!(fields.get("PATH").map(String::as_str), Some(r#"a\b"#));
+    }
+
+    #[test]
+    fn ensure_ok_rejects_non_ok_results() {
+        let err = ensure_ok("STREAM STATUS RESULT=CANT_REACH_PEER", "STREAM CONNECT")
+            .expect_err("non-OK result must fail");
+
+        assert!(err.to_string().contains("STREAM CONNECT failed"));
+    }
 }

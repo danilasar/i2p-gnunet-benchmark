@@ -75,3 +75,47 @@ impl<W: Write> Write for TeeWriter<'_, W> {
         self.inner.flush()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{receive_payload, send_payload};
+    use crate::payload::{expected_sha256, PayloadReader};
+    use std::io::Cursor;
+
+    #[test]
+    fn send_and_receive_payload_roundtrip() {
+        let mut encoded = Vec::new();
+        let mut reader = PayloadReader::new(4096, 42);
+
+        let (written, sent_sum) = send_payload(&mut encoded, &mut reader, 4096).expect("send");
+        let (received, sha_ok, _) = receive_payload(&mut Cursor::new(encoded)).expect("receive");
+
+        assert_eq!(written, 4096);
+        assert_eq!(received, 4096);
+        assert!(sha_ok);
+        assert_eq!(sent_sum, expected_sha256(4096, 42));
+    }
+
+    #[test]
+    fn send_payload_rejects_short_reader() {
+        let mut encoded = Vec::new();
+        let mut reader = Cursor::new(vec![1, 2, 3]);
+
+        let err = send_payload(&mut encoded, &mut reader, 4).expect_err("short reader");
+
+        assert!(err.to_string().contains("short payload reader"));
+    }
+
+    #[test]
+    fn receive_payload_rejects_bad_checksum() {
+        let mut encoded = Vec::new();
+        let mut reader = PayloadReader::new(32, 42);
+        send_payload(&mut encoded, &mut reader, 32).expect("send");
+        let last = encoded.last_mut().expect("checksum byte");
+        *last ^= 0xff;
+
+        let (_, sha_ok, _) = receive_payload(&mut Cursor::new(encoded)).expect("receive");
+
+        assert!(!sha_ok);
+    }
+}

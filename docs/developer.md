@@ -91,12 +91,18 @@ outbound.quantity=2
 
 ```bash
 cargo build --release
+just test-unit
+just test-sam3
 just build
 just test
 just test-gnunet
 just test-i2p
 just test-transfer
 ```
+
+`just test-unit` запускает быстрые тесты без Docker: `sam3`, CLI crates и
+только library-тесты `testbed`. `just test-sam3` проверяет unit-тесты `sam3`
+и fake SAM server integration tests.
 
 `just test` и `just test-rust` запускают все Rust-интеграционные тесты
 последовательно (`--test-threads=1`), потому что тесты используют одинаковые

@@ -4,6 +4,14 @@ set shell := ["bash", "-c"]
 build:
     docker build -t coursework-overlay:latest .
 
+# Быстрые тесты без Docker и root
+test-unit:
+    cargo test -p sam3 -p sam-sender -p sam-receiver && cargo test -p testbed --lib
+
+# Быстрые тесты SAM-библиотеки с fake SAM server
+test-sam3:
+    cargo test -p sam3 -- --nocapture
+
 # Запустить все smoke-тесты в Docker
 test:
     docker run --rm --privileged -v $(pwd):/workspace -w /workspace coursework-overlay:latest bash -lc 'cargo build --release --manifest-path /workspace/Cargo.toml && cp /workspace/target/release/sam-sender /usr/local/bin/sam-sender && cp /workspace/target/release/sam-receiver /usr/local/bin/sam-receiver && cargo test --manifest-path /workspace/Cargo.toml -p testbed -- --test-threads=1 --nocapture'

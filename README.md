@@ -27,14 +27,17 @@ i2pd/SAM STREAM и GNUnet/CADET.
 
 ```bash
 just build          # собрать Docker-образ
+just test-unit      # быстрые unit/fake-server тесты без Docker
+just test-sam3      # только тесты SAM-библиотеки
 just test           # все Rust-интеграционные тесты последовательно
 just test-gnunet    # только GNUnet smoke
 just test-i2p       # только i2pd smoke
 just test-transfer  # SAM STREAM transfer
 ```
 
-Тесты запускаются внутри `--privileged` контейнера, потому что стенд создаёт
-Linux network namespaces, veth-пары и bridge.
+Тесты `test`, `test-gnunet`, `test-i2p` и `test-transfer` запускаются внутри
+`--privileged` контейнера, потому что стенд создаёт Linux network namespaces,
+veth-пары и bridge.
 
 ## Структура
 

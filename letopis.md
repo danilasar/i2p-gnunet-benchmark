@@ -410,3 +410,30 @@ SAM-интерфейсов в отдельную библиотеку до ко�
 - `cargo test --workspace --no-run` — PASS;
 - `just test-transfer` — PASS (`setup≈9090ms`, `transfer≈2ms`,
   `goodput≈4194 Mbps`, `first_byte≈9418ms`).
+
+## Тестовое покрытие SAM-библиотеки, 2026-06-05
+
+Начато покрытие `sam3` быстрыми тестами без реального i2pd:
+- unit-тесты для payload/wire и SAM response parsing;
+- integration-тесты с in-process fake SAM server, который проверяет фактически отправленные
+  команды `HELLO`, `DEST GENERATE`, `SESSION CREATE`, `STREAM CONNECT`, `STREAM ACCEPT`.
+
+Решение: реальные Docker/i2pd-тесты оставить для совместимости с настоящим router, а основную
+регрессию протокольного API ловить быстрыми unit/fake-server тестами.
+
+В процессе добавления тестов компилятор поймал проблему в тесте: `Result::expect_err`
+требовал `Debug` для успешного типа `SamSession`, а `TcpStream` внутри session не обязан
+участвовать в debug-представлении. Решение: заменить `expect_err` на явный `match`, не меняя
+публичный тип ради теста.
+
+Добавлены just-команды:
+- `just test-unit` — быстрые тесты `sam3`, CLI crates и `testbed --lib` без Docker/root;
+- `just test-sam3` — `cargo test -p sam3 -- --nocapture`.
+
+CI обновлён: после сборки Docker-образа добавлен отдельный шаг fast tests без `--privileged`.
+Это не заменяет i2pd integration tests, но даёт более ранний и дешёвый сигнал по `sam3` API.
+
+Проверки:
+- `just test-sam3` — PASS: 9 unit-тестов `sam3` и 4 fake SAM integration tests;
+- `just test-unit` — PASS;
+- `cargo test --workspace --no-run` — PASS.

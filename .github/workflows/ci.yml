@@ -24,6 +24,14 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Run fast tests
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/workspace \
+            -w /workspace \
+            coursework-overlay:latest \
+            bash -lc 'cargo test --manifest-path /workspace/Cargo.toml -p sam3 -p sam-sender -p sam-receiver && cargo test --manifest-path /workspace/Cargo.toml -p testbed --lib'
+
       - name: Run integration tests
         run: |
           docker run --rm --privileged \

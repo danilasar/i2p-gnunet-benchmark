@@ -712,3 +712,67 @@ FakeSam ошибочно слал `"REMOTE DESTINATION=clientdest"` вместо
   `accept_timeout_returns_error_when_no_client`.
 - `cargo test -p sam3` — 28 тестов, PASS, 0 предупреждений.
 - `cargo build --workspace` — PASS, 0 предупреждений.
+
+## Тесты совместимости sam3 с go-i2p/sam3, 2026-06-05
+
+Реализованы кросс-языковые интеграционные тесты Rust-библиотеки `sam3` против Go-реализации
+`go-i2p/sam3 v0.33.92`. Три теста: Rust→Go (echo), Go→Rust (echo), NAMING LOOKUP от Rust
+по адресу Go-destination.
+
+### Что сделано
+
+- **`go-compat/main.go`** — Go-бинарник `go-sam3-peer`. Роли `server` (echo) и `client`
+  (connect + write + ReadFull). JSON-протокол совпадает с sam-bench: `{"type":"ready","dest":"..."}`,
+  `{"type":"result","success":...}`. `go.mod` с `go-i2p/sam3 v0.33.92` и `go-i2p/i2pkeys`
+  (ключи вынесены в отдельный модуль в новых версиях go-i2p).
+- **`sam-compat/`** — новый Rust-бинарник. Роли: `sender` (dial + write + read_exact),
+  `receiver` (accept + echo), `lookup` (NAMING LOOKUP). Выводит тот же JSON-протокол.
+- **`testbed/tests/sam3_compat.rs`** — три теста на базе `setup_two_sam_nodes()`:
+  ноды 1 и 2 с SAM, нода 0 — floodfill. Оба пира запускаются через `ip netns exec`
+  с `--sam 127.0.0.1:7656`.
+- **Инфраструктура**: `Dockerfile` — сборка Go-бинарника и копирование `sam-compat`;
+  `Justfile` — рецепт `test-compat` с явным `cp sam-compat /usr/local/bin/sam-compat`;
+  `Cargo.toml` — `sam-compat` в workspace.
+
+### Нетривиальные решения
+
+**Недостижимость SAM-порта с хоста** — первоначальный план вызывать `SamClient::connect`
+прямо из тестового кода оказался нереализуемым: i2pd слушает SAM на `127.0.0.1` внутри
+netns, у хоста нет маршрута до `10.89.0.0/24`, мост создаётся без IP на хостовой стороне.
+Решение: оба пира (и Go, и Rust) запускаются через `ip netns exec`, как в `transfer.rs`.
+Это потребовало введения `sam-compat` бинарника — аналога `sam-sender`/`sam-receiver`.
+
+**Дедлок в echo-протоколе** — в схеме «сервер делает `io.Copy(conn, conn)` и пишет
+result только после EOF» Rust-тест, читающий result до закрытия соединения, зависает
+навсегда. Исправлено тем, что Rust-клиент запускается через `Command::output()` (блокирует
+до завершения процесса); процесс завершается и закрывает соединение раньше, чем тест
+читает ответ от Go-сервера.
+
+**Определение конца сообщения в `run_receiver`** — без знания длины сообщения echo-ресивер
+не знает, когда клиент закончил отправку. Первоначальное решение: `set_read_timeout(5s)` +
+`sleep(1s)` — нефрагментированные сообщения работают, но добавляют задержку и ненадёжны
+при больших данных. Окончательное решение: передавать `--msg` в `sam-compat receiver`,
+тогда `read_exact(msg.len())` детерминированно читает ровно нужное количество байт;
+таймаут-путь остаётся как fallback для режима без известной длины.
+
+**`dial_with_retry` в `sam-compat sender`** — одиночный `dial_timeout(120s)` падает
+при `CANT_REACH_PEER` (LeaseSet ещё не опубликован). Добавлен цикл retry: попытки каждые 5с,
+суммарный deadline 120с; ошибки `CantReachPeer` и `Timeout` — повтор, остальные — немедленный
+возврат.
+
+**`test-compat` не копировал бинарник** — рецепт делал `cargo build --release` но не
+`cp sam-compat /usr/local/bin/sam-compat`. При изменении кода без пересборки образа
+тест использовал старый бинарник. Исправлено добавлением явного `cp` в рецепт
+(по аналогии с `test-transfer`).
+
+**Зависимость `i2pkeys`** — в актуальной версии `go-i2p/sam3` типы ключей вынесены в
+отдельный пакет `github.com/go-i2p/i2pkeys`; старые примеры с `sam3.I2PKeys` не собираются.
+Потребовалось изучить исходники библиотеки в процессе отладки и добавить явный импорт.
+
+### Проверки
+
+- `just test-compat` — все 3 теста PASS: `test_rust_sender_go_receiver`,
+  `test_go_sender_rust_receiver`, `test_lookup_against_go_destination`.
+- `just test-transfer` — PASS (регрессий нет).
+- `just build` — Docker-образ собирается корректно.
+- `cargo build --workspace` — PASS, 0 предупреждений.

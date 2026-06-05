@@ -26,8 +26,12 @@ test-i2p:
 
 # Запустить тест переноса данных SAM
 test-transfer:
-    docker run --rm --privileged -v $(pwd):/workspace -w /workspace coursework-overlay:latest bash -lc 'mkdir -p /workspace/tmp/test-artifacts/sam-transfer && cargo build --release --manifest-path /workspace/Cargo.toml && cp /workspace/target/release/sam-sender /usr/local/bin/sam-sender && cp /workspace/target/release/sam-receiver /usr/local/bin/sam-receiver && TEST_ARTIFACT_DIR=/workspace/tmp/test-artifacts/sam-transfer cargo test --manifest-path /workspace/Cargo.toml -p testbed -- test_sam_transfer --nocapture'
+	docker run --rm --privileged -v $(pwd):/workspace -w /workspace coursework-overlay:latest bash -lc 'mkdir -p /workspace/tmp/test-artifacts/sam-transfer && cargo build --release --manifest-path /workspace/Cargo.toml && cp /workspace/target/release/sam-sender /usr/local/bin/sam-sender && cp /workspace/target/release/sam-receiver /usr/local/bin/sam-receiver && TEST_ARTIFACT_DIR=/workspace/tmp/test-artifacts/sam-transfer cargo test --manifest-path /workspace/Cargo.toml -p testbed -- test_sam_transfer --nocapture'
 
+test-compat:
+	docker run --rm --privileged -v $(pwd):/workspace -w /workspace \
+		coursework-overlay:latest \
+		bash -lc 'cargo build --release --manifest-path /workspace/Cargo.toml && cp /workspace/target/release/sam-compat /usr/local/bin/sam-compat && cargo test -p testbed --test sam3_compat -- --test-threads=1 --nocapture'
 # Алиас для всех Rust интеграционных тестов
 test-rust:
     @just test

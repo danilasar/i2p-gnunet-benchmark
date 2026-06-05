@@ -6,7 +6,7 @@ build:
 
 # Быстрые тесты без Docker и root
 test-unit:
-    cargo test -p sam3 -p sam-sender -p sam-receiver && cargo test -p testbed --lib
+    cargo test -p sam3 -p sam-bench -p sam-sender -p sam-receiver && cargo test -p testbed --lib
 
 # Быстрые тесты SAM-библиотеки с fake SAM server
 test-sam3:

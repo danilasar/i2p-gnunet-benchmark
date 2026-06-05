@@ -35,9 +35,10 @@
 ├── Justfile                  # команды сборки и запуска тестов
 ├── AGENTS.md
 ├── letopis.md
-├── sam3/                     # SAM3 library: protocol, payload, wire, workflows
-├── sam-sender/               # CLI sender over sam3
-├── sam-receiver/             # CLI receiver over sam3
+├── sam3/                     # SAM3 protocol library
+├── sam-bench/                # benchmark helpers over sam3
+├── sam-sender/               # CLI sender over sam-bench
+├── sam-receiver/             # CLI receiver over sam-bench
 ├── testbed/
 │   ├── src/
 │   │   ├── topology.rs       # netns, veth, bridge

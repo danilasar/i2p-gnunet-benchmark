@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "sam3",
+    "sam-bench",
     "sam-sender",
     "sam-receiver",
     "testbed",

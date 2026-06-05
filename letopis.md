@@ -437,3 +437,23 @@ CI обновлён: после сборки Docker-образа добавле�
 - `just test-sam3` — PASS: 9 unit-тестов `sam3` и 4 fake SAM integration tests;
 - `just test-unit` — PASS;
 - `cargo test --workspace --no-run` — PASS.
+
+## Разделение SAM core и benchmark helpers, 2026-06-05
+
+Начато очищение `sam3` от benchmark-специфики. Решение: вынести `messages`, `payload`,
+`wire`, `sender`, `receiver` в отдельный crate `sam-bench`, а не дублировать их внутри
+`sam-sender`/`sam-receiver`. Причина: эти helpers одновременно нужны обоим CLI и
+`testbed/tests/transfer.rs`, но не являются частью универсального SAM3 API.
+
+Реализовано:
+- создан workspace member `sam-bench`;
+- `sam3` оставлен только с `session.rs` и fake SAM тестами;
+- `sam-bench` зависит от `sam3` и содержит JSON ready/result, deterministic payload,
+  benchmark wire protocol и sender/receiver workflows;
+- `sam-sender`, `sam-receiver` и `testbed/tests/transfer.rs` переключены на `sam-bench`;
+- быстрые тесты и CI fast step обновлены, чтобы проверять оба crate.
+
+Проверки:
+- `cargo test -p sam3 -p sam-bench -p sam-sender -p sam-receiver` — PASS;
+- `cargo test -p testbed --lib` — PASS;
+- `cargo test --workspace --no-run` — PASS.

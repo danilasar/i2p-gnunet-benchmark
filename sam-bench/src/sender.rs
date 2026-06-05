@@ -1,4 +1,5 @@
 use super::{messages::ResultMsg, payload::PayloadReader, wire::send_payload};
+use sam3::{SamSession, SAM_TUNNEL_OPTIONS};
 use std::{
     error::Error,
     io::Write,
@@ -7,8 +8,6 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-
-use super::session::{SamSession, SAM_TUNNEL_OPTIONS};
 
 pub struct SenderConfig {
     pub sam_addr: String,

@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-sam3 = { path = "../sam3" }
+sam-bench = { path = "../sam-bench" }
 serde_json = "1"
 sha2 = "0.10"
 base64 = "0.22"

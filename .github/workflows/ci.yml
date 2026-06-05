@@ -30,7 +30,7 @@ jobs:
             -v ${{ github.workspace }}:/workspace \
             -w /workspace \
             coursework-overlay:latest \
-            bash -lc 'cargo test --manifest-path /workspace/Cargo.toml -p sam3 -p sam-sender -p sam-receiver && cargo test --manifest-path /workspace/Cargo.toml -p testbed --lib'
+            bash -lc 'cargo test --manifest-path /workspace/Cargo.toml -p sam3 -p sam-bench -p sam-sender -p sam-receiver && cargo test --manifest-path /workspace/Cargo.toml -p testbed --lib'
 
       - name: Run integration tests
         run: |

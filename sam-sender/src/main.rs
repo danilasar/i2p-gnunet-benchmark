@@ -1,5 +1,5 @@
 use clap::Parser;
-use sam3::sender::{run_sender, SenderConfig};
+use sam_bench::sender::{run_sender, SenderConfig};
 use std::{
     process,
     time::{Duration, SystemTime, UNIX_EPOCH},

@@ -14,6 +14,9 @@ testbed/src/node/
 
 sam3/src/
     session.rs     ручной SAM3 поверх TCP
+
+sam-bench/src/
+    messages.rs    JSON ready/result для transfer-теста
     wire.rs        size + payload + sha256
     payload.rs     детерминированный payload
     sender.rs      sender workflow
@@ -21,7 +24,7 @@ sam3/src/
 
 sam-sender/src/main.rs
 sam-receiver/src/main.rs
-    тонкие CLI-обёртки над sam3
+    тонкие CLI-обёртки над sam-bench
 
 testbed/tests/
     smoke.rs       test_gnunet_smoke, test_i2pd_smoke
@@ -100,9 +103,9 @@ just test-i2p
 just test-transfer
 ```
 
-`just test-unit` запускает быстрые тесты без Docker: `sam3`, CLI crates и
-только library-тесты `testbed`. `just test-sam3` проверяет unit-тесты `sam3`
-и fake SAM server integration tests.
+`just test-unit` запускает быстрые тесты без Docker: `sam3`, `sam-bench`,
+CLI crates и только library-тесты `testbed`. `just test-sam3` проверяет
+unit-тесты `sam3` и fake SAM server integration tests.
 
 `just test` и `just test-rust` запускают все Rust-интеграционные тесты
 последовательно (`--test-threads=1`), потому что тесты используют одинаковые

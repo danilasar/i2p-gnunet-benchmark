@@ -4,6 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-sam3 = { path = "../sam3" }
+sam-bench = { path = "../sam-bench" }
 clap = { version = "4", features = ["derive"] }
 serde_json = "1"

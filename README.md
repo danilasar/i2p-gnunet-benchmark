@@ -44,7 +44,8 @@ veth-пары и bridge.
 ```
 Cargo.toml
 Cargo.lock
-sam3/                библиотека SAM3 + wire/payload + sender/receiver workflows
+sam3/                библиотека SAM3: session, connect, accept
+sam-bench/           benchmark helpers: JSON messages, payload, wire, workflows
 sam-sender/          Rust CLI для SAM STREAM отправителя
 sam-receiver/        Rust CLI для SAM STREAM получателя
 testbed/

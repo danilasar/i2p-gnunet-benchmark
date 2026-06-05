@@ -1,4 +1,4 @@
-use sam3::{ReadyMsg, ResultMsg};
+use sam_bench::{ReadyMsg, ResultMsg};
 use serde_json::Value;
 use std::{
     error::Error,

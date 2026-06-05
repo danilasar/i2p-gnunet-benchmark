@@ -514,3 +514,28 @@ benchmark-трафика и не добавлять лишние SAM control-с�
   (`receiver did not send result message`, LeaseSet lookup failure);
 - повторный `just test-transfer` после возврата одно-соединительного transient path — PASS
   (`setup≈15134ms`, `transfer≈2ms`, `goodput≈4194 Mbps`, `first_byte≈15445ms`).
+
+Технический долг:
+- `new_transient_stream_session()` сейчас не является прямым аналогом Go-пути
+  `NewKeys()` + `NewStreamSession(...)`: для устойчивости benchmark он делает `DEST GENERATE`
+  и `SESSION CREATE` на одном SAM control socket. Это нужно оставить явно задокументированным,
+  а после стабилизации i2pd testbed проверить, можно ли безопасно перевести transient helper
+  на тот же путь, что reusable keys API.
+- `Keys::read_keyfile()` умеет читать наш простой формат `PUB=...` / `PRIV=...` и fallback
+  private-only, но пока не восстанавливает public destination из raw private key. Для полноценной
+  совместимости с Go `i2pkeys` нужен настоящий parser I2P private key / destination.
+
+Что ещё осталось для полноценной SAM-библиотеки:
+- `NAMING LOOKUP` (`SamClient::lookup`) и typed handling `KEY_NOT_FOUND`, `INVALID_KEY`,
+  `I2P_ERROR`;
+- typed `SessionOptions` builder вместо `&[(&str, &str)]`, включая zero-hop/small/standard
+  presets и arbitrary I2CP options;
+- typed `SamError` / `SamResultCode` вместо строковых `Box<dyn Error>` в core API;
+- STREAM ergonomics: `SamConn`, local/remote destination metadata, deadline helpers,
+  `StreamListener::incoming()`;
+- `STREAM FORWARD`;
+- DATAGRAM и RAW sessions;
+- PRIMARY/MASTER sessions SAM 3.3;
+- examples и crate-level README для `sam3`;
+- real i2pd integration tests для reusable keyfile: создать ключи, сохранить, пересоздать
+  session с тем же private key и проверить стабильность destination/приём stream.

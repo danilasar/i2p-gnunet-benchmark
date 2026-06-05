@@ -858,6 +858,44 @@ result только после EOF» Rust-тест, читающий result до
 - `cargo check --workspace` — PASS.
 - `go build ./go-compat` — PASS.
 
+## StreamListener::incoming(), 2026-06-05
+
+Добавлен convenience-метод `StreamListener::incoming()` — бесконечный итератор
+над входящими соединениями, по аналогии со стандартным `TcpListener::incoming()`.
+
+### Что сделано
+
+**Структура `Incoming<'a>` в `sam3/src/session.rs`:**
+```rust
+pub struct Incoming<'a> {
+    listener: &'a StreamListener,
+}
+
+impl<'a> Iterator for Incoming<'a> {
+    type Item = Result<SamConn, SamError>;
+    fn next(&mut self) -> Option<Self::Item> {
+        Some(self.listener.accept())
+    }
+}
+```
+Итератор бесконечный: `next` никогда не возвращает `None`. Ошибки возвращаются
+через `Some(Err(...))`, не прерывают цикл — по аналогии со стандартной библиотекой.
+
+**Метод `StreamListener::incoming(&self) -> Incoming<'_>`** — возвращает итератор,
+заимствующий `StreamListener` на время своего существования.
+
+**`Incoming` экспортирован из `lib.rs`.**
+
+**Unit-тест `stream_listener_incoming_yields_connections`** — вызывает
+`incoming.next()` дважды, получает два `SamConn`. FakeSam обрабатывает оба
+`STREAM ACCEPT` последовательно в одном обработчике (так как `create_stream`
+мультиплексирует `DEST GENERATE` и `SESSION CREATE` в одно TCP-соединение).
+
+### Проверки
+
+- `cargo test -p sam3 stream_listener` — PASS.
+- `cargo check --workspace` — PASS, 0 предупреждений.
+
 ## STREAM FORWARD (ForwardGuard), 2026-06-05
 
 Реализована команда `STREAM FORWARD` протокола SAM v3.3. Позволяет поручить SAM-мосту

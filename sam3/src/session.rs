@@ -830,6 +830,18 @@ pub struct StreamListener {
     local: Destination,
 }
 
+pub struct Incoming<'a> {
+    listener: &'a StreamListener,
+}
+
+impl<'a> Iterator for Incoming<'a> {
+    type Item = Result<SamConn, crate::SamError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        Some(self.listener.accept())
+    }
+}
+
 impl StreamListener {
     pub fn accept(&self) -> Result<SamConn, crate::SamError> {
         SamSession::accept_stream(&self.sam_addr, &self.id, &self.local)
@@ -837,6 +849,10 @@ impl StreamListener {
 
     pub fn accept_timeout(&self, timeout: Duration) -> Result<SamConn, crate::SamError> {
         accept_stream_timeout(&self.sam_addr, &self.id, &self.local, timeout)
+    }
+
+    pub fn incoming(&self) -> Incoming<'_> {
+        Incoming { listener: self }
     }
 
     pub fn id(&self) -> &str {
@@ -1897,6 +1913,50 @@ mod tests {
         {
             let _guard = session.forward(8080, false).unwrap();
         }
+        server.join();
+    }
+
+    #[test]
+    fn stream_listener_incoming_yields_connections() {
+        let server = FakeSam::spawn_many(vec![
+            Box::new(|mut stream| {
+                expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+                writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+                expect_line(&mut stream, "DEST GENERATE SIGNATURE_TYPE=7");
+                writeln!(stream, "DEST REPLY PUB=pubdest PRIV=privdest").unwrap();
+                let _ = read_line(&mut stream);
+                writeln!(stream, "SESSION STATUS RESULT=OK").unwrap();
+            }),
+            Box::new(|mut stream| {
+                expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+                writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+                expect_line(&mut stream, "STREAM ACCEPT ID=test_session SILENT=false");
+                writeln!(stream, "STREAM STATUS RESULT=OK").unwrap();
+                writeln!(stream, "remote_dest_1").unwrap();
+            }),
+            Box::new(|mut stream| {
+                expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+                writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+                expect_line(&mut stream, "STREAM ACCEPT ID=test_session SILENT=false");
+                writeln!(stream, "STREAM STATUS RESULT=OK").unwrap();
+                writeln!(stream, "remote_dest_2").unwrap();
+            }),
+        ]);
+
+        let client = SamClient::connect(&server.addr);
+        let session = client
+            .new_transient_stream_session("test_session", &SessionOptions::zero_hop())
+            .unwrap();
+
+        let listener = session.listen();
+        let mut incoming = listener.incoming();
+
+        let conn1 = incoming.next().unwrap().unwrap();
+        assert_eq!(conn1.remote_destination().as_str(), "remote_dest_1");
+
+        let conn2 = incoming.next().unwrap().unwrap();
+        assert_eq!(conn2.remote_destination().as_str(), "remote_dest_2");
+
         server.join();
     }
 

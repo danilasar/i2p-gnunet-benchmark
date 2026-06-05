@@ -1,10 +1,131 @@
-use sam3::{Destination, Keys, SamClient, SamSession, SAM_TUNNEL_OPTIONS};
+use sam3::{Destination, Keys, SamClient, SamError, SamSession, SAM_TUNNEL_OPTIONS};
 use std::{
     io::{Read, Write},
     net::{TcpListener, TcpStream},
     thread,
     time::Duration,
 };
+
+#[test]
+fn connect_stream_returns_cant_reach_peer() {
+    let server = FakeSam::spawn(|mut stream| {
+        expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+        writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+
+        let _ = read_line(&mut stream);
+        writeln!(stream, "STREAM STATUS RESULT=CANT_REACH_PEER").unwrap();
+    });
+
+    let err = SamSession::connect_stream(&server.addr, "client", "dest").unwrap_err();
+    assert_eq!(err, SamError::CantReachPeer);
+    server.join();
+}
+
+#[test]
+fn session_create_returns_duplicated_id() {
+    let server = FakeSam::spawn(|mut stream| {
+        expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+        writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+
+        let _ = read_line(&mut stream);
+        writeln!(stream, "SESSION STATUS RESULT=DUPLICATED_ID").unwrap();
+    });
+
+    let err = SamSession::create_stream(&server.addr, "dup", SAM_TUNNEL_OPTIONS).unwrap_err();
+    assert_eq!(err, SamError::DuplicatedId);
+    server.join();
+}
+
+#[test]
+fn lookup_resolves_name_to_destination() {
+    let server = FakeSam::spawn(|mut stream| {
+        expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+        writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+
+        expect_line(&mut stream, "NAMING LOOKUP NAME=example.i2p");
+        writeln!(stream, "NAMING REPLY RESULT=OK NAME=example.i2p VALUE=base64dest").unwrap();
+    });
+
+    let client = SamClient::connect(&server.addr);
+    let dest = client.lookup("example.i2p").unwrap();
+    assert_eq!(dest.as_str(), "base64dest");
+    server.join();
+}
+
+#[test]
+fn lookup_returns_key_not_found() {
+    let server = FakeSam::spawn(|mut stream| {
+        expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+        writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+
+        expect_line(&mut stream, "NAMING LOOKUP NAME=unknown.i2p");
+        writeln!(stream, "NAMING REPLY RESULT=KEY_NOT_FOUND NAME=unknown.i2p").unwrap();
+    });
+
+    let client = SamClient::connect(&server.addr);
+    let err = client.lookup("unknown.i2p").unwrap_err();
+    assert_eq!(err, SamError::KeyNotFound);
+    server.join();
+}
+
+#[test]
+fn lookup_returns_invalid_key() {
+    let server = FakeSam::spawn(|mut stream| {
+        expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+        writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+
+        expect_line(&mut stream, "NAMING LOOKUP NAME=bad");
+        writeln!(stream, "NAMING REPLY RESULT=INVALID_KEY NAME=bad").unwrap();
+    });
+
+    let client = SamClient::connect(&server.addr);
+    let err = client.lookup("bad").unwrap_err();
+    assert_eq!(err, SamError::InvalidKey);
+    server.join();
+}
+
+#[test]
+fn lookup_returns_i2p_error_with_message() {
+    let server = FakeSam::spawn(|mut stream| {
+        expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+        writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+
+        expect_line(&mut stream, "NAMING LOOKUP NAME=x");
+        writeln!(stream, "NAMING REPLY RESULT=I2P_ERROR NAME=x MESSAGE=\"router error\"").unwrap();
+    });
+
+    let client = SamClient::connect(&server.addr);
+    let err = client.lookup("x").unwrap_err();
+    assert_eq!(err, SamError::I2PError("router error".into()));
+    server.join();
+}
+
+#[test]
+fn stream_session_lookup_uses_sam_addr() {
+    let server = FakeSam::spawn_many(vec![
+        Box::new(|mut stream| {
+            expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+            writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+            expect_line(&mut stream, "DEST GENERATE SIGNATURE_TYPE=7");
+            writeln!(stream, "DEST REPLY PUB=pubdest PRIV=privdest").unwrap();
+            let _ = read_line(&mut stream);
+            writeln!(stream, "SESSION STATUS RESULT=OK").unwrap();
+        }),
+        Box::new(|mut stream| {
+            expect_line(&mut stream, "HELLO VERSION MIN=3.0 MAX=3.3");
+            writeln!(stream, "HELLO REPLY RESULT=OK VERSION=3.3").unwrap();
+            expect_line(&mut stream, "NAMING LOOKUP NAME=example.i2p");
+            writeln!(stream, "NAMING REPLY RESULT=OK NAME=example.i2p VALUE=base64dest").unwrap();
+        }),
+    ]);
+    let client = SamClient::connect(&server.addr);
+    let session = client
+        .new_transient_stream_session("client", SAM_TUNNEL_OPTIONS)
+        .expect("create stream session");
+    let dest = session.lookup("example.i2p").unwrap();
+    assert_eq!(dest.as_str(), "base64dest");
+    server.join();
+}
 
 #[test]
 fn accept_exposes_remote_destination() {
@@ -386,7 +507,7 @@ fn create_stream_returns_sam_errors() {
         Err(err) => err,
     };
 
-    assert!(err.to_string().contains("DEST GENERATE failed"));
+    assert_eq!(err, SamError::I2PError("key generation failed".into()));
     server.join();
 }
 

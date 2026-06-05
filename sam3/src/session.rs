@@ -249,6 +249,12 @@ impl SamClient {
             Ok(keys)
         }
     }
+
+    pub fn lookup(&self, name: &str) -> Result<Destination, crate::SamError> {
+        let mut stream = TcpStream::connect(&self.sam_addr)?;
+        hello(&mut stream)?;
+        lookup_on(&mut stream, name)
+    }
 }
 
 #[derive(Debug)]
@@ -273,6 +279,12 @@ impl StreamSession {
 
     pub fn keys(&self) -> &Keys {
         self.session.keys()
+    }
+
+    pub fn lookup(&self, name: &str) -> Result<Destination, crate::SamError> {
+        let mut stream = TcpStream::connect(&self.sam_addr)?;
+        hello(&mut stream)?;
+        lookup_on(&mut stream, name)
     }
 
     pub fn dial(&self, dest: &str) -> Result<SamConn, crate::SamError> {
@@ -438,6 +450,22 @@ fn hello(stream: &mut TcpStream) -> Result<(), crate::SamError> {
         return Err(crate::SamError::from_result_line(&line));
     }
     Ok(())
+}
+
+fn lookup_on(stream: &mut TcpStream, name: &str) -> Result<Destination, crate::SamError> {
+    write!(stream, "NAMING LOOKUP NAME={name}\n")?;
+    stream.flush()?;
+    let line = read_line(stream)?;
+    let fields = parse_fields(&line);
+    match fields.get("RESULT").map(String::as_str) {
+        Some("OK") => {
+            let value = fields.get("VALUE").ok_or_else(|| {
+                crate::SamError::UnexpectedResponse(format!("NAMING REPLY without VALUE: {line}"))
+            })?;
+            Ok(Destination::new(value))
+        }
+        _ => Err(crate::SamError::from_result_line(&line)),
+    }
 }
 
 pub(crate) fn ensure_ok(line: &str) -> Result<(), crate::SamError> {

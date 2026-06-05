@@ -540,6 +540,36 @@ benchmark-трафика и не добавлять лишние SAM control-с�
 - real i2pd integration tests для reusable keyfile: создать ключи, сохранить, пересоздать
   session с тем же private key и проверить стабильность destination/приём stream.
 
+## NAMING LOOKUP: разрешение I2P-адресов, 2026-06-05
+
+### Что сделано
+
+- `SamClient::lookup(name)` и `StreamSession::lookup(name)` → `Result<Destination, SamError>`.
+- Приватный хелпер `lookup_on` — единая точка протокольной логики: отправляет
+  `NAMING LOOKUP NAME=<name>`, разбирает `NAMING REPLY`, возвращает `VALUE=` или ошибку.
+- Оба метода открывают новое TCP-соединение (как `new_keys`) — управляющий сокет сессии
+  не затрагивается: это требование протокола SAM.
+- Обработка всех error-кодов через уже существующие варианты `SamError`: `KeyNotFound`,
+  `InvalidKey`, `I2PError`. `VALUE` отсутствует при `RESULT=OK` → `UnexpectedResponse`.
+- 5 новых fake-SAM тестов (6-й из ТЗ поглощён первым: `expect_line` верифицирует формат команды).
+
+### Проблемы при реализации
+
+**Чувствительность `Edit` к объёму контекста** — попытка вставить всю реализацию одним блоком
+дала «0 occurrences found». Решение: хирургические правки по три отдельных шага
+(`SamClient::lookup` → `StreamSession::lookup` → `lookup_on`).
+
+**Отдельные соединения** — намеренно, чтобы не слать `NAMING LOOKUP` в управляющий сокет сессии.
+Аналогично `new_keys`.
+
+**Отсутствие `VALUE` при `RESULT=OK`** — явная проверка через `ok_or_else → UnexpectedResponse`,
+предотвращает panic на сломанном ответе bridge.
+
+### Проверки
+
+- 23 теста в `fake_sam.rs` — PASS.
+- `cargo build --workspace` — 0 предупреждений.
+
 ## SamError: типизированные ошибки SAM-протокола, 2026-06-05
 
 ### Что сделано
